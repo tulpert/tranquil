@@ -18,6 +18,9 @@
  .Parameter Verbose
   Prints out Verbose information during run
 
+ .Parameter Force
+  Forces the install even if errors have been detected or access rights (run as Administrator) are not in place
+
  .Parameter WhatIf
   Only prints out what to do, but does not actually do it
 #>
@@ -25,9 +28,13 @@ function Install-TPAMPackage {
   Param (
     [Parameter(Mandatory=$True)][String]$TPAMPackage,
     [String]$Root = "/",
+    [Switch]$Force,
     [Switch]$WhatIf,
     [Switch]$ReInstall
   )
+  if ( ! ((whoami) -match "root|administrator") -or ($Force) ) {
+    Write-Error ("You should run installer as Administrator! Use -Force to override at your own risk.")
+  }
 
   # Get the module's private variables
   $privvars       = Get-PrivateVariables
@@ -53,18 +60,18 @@ function Install-TPAMPackage {
   }
 
   # Importing the CONTROL metadata
-  $controlHash = Export-TPAMBuildControl -ControlFilePath ("${TMPDIR}/"+$privvars['TPAMBUILD']+"/CONTROL")
+  $controlHash = Export-TPAMBuildControl -ControlFilePath ("${TMPDIR}/"+$privvars['TPAMBUILD']+"/control")
 
   # Get the latest cache info
   Write-Verbose ("Reading cache from possible previous installs") 
-  $currentCache = Get-Cache -PackageName $controlHash['package']
+  $currentCache = Get-Cache -PackageName $controlHash['Name']
 
   if ( $currentCache.ContainsKey('meta') ) {
     if ( ($currentCache['meta'].version) -eq ($controlHash['version']) ) {
       if ( $ReInstall ) {
         Write-Verbose ("ReInstall flag detected. Will overwrite existing installation")
       } else {
-        Write-Host ("Version [" + $controlHash['version'] + "] is already installed. Use -ReInstall to reinstall")
+        Write-Host ('[' + $controlHash['Name'] + "-" + $controlHash['version'] + "] is already installed. Use -ReInstall to reinstall")
         Break
       }
     }
@@ -100,8 +107,15 @@ function Install-TPAMPackage {
         Write-WhatIf ("Want to create: " + $Target)
       } else {
         Write-Verbose ("Ensuring creation of directory (1): " + $Target)
-        $newitem = New-Item -ErrorAction SilentlyContinue -ItemType Directory -Path "${Target}" 
-        Write-Cache -Item ("${Target}") -PackageName $controlHash['package'] -PackageVersion $controlHash['version']
+        if ( ! (Test-Path $Target) ) {
+          Write-Verbose ("Creating: " + $Target)
+          $newitem = New-Item -ErrorAction SilentlyContinue -ItemType Directory -Path "${Target}" 
+        }
+        if ( ! (Test-Path $Target) ) {
+          Write-Error ("Could not create item [$Target]. Ensure you are running Installer as Administrator!") 
+          exit (665)
+        }
+        Write-Cache -Item ("${Target}") -PackageName $controlHash['Name'] -PackageVersion $controlHash['version']
       }
     }
 
@@ -116,7 +130,7 @@ function Install-TPAMPackage {
           Write-Verbose ("Ensuring creation of directory (2): " + $Target)
           $newitem = New-Item -ErrorAction SilentlyContinue -ItemType Directory -Path "${Target}" 
           # if ($newitem) {
-          Write-Cache -Item ("${Target}") -PackageName $controlHash['package'] -PackageVersion $controlHash['version']
+          Write-Cache -Item ("${Target}") -PackageName $controlHash['Name'] -PackageVersion $controlHash['version']
           #}
         }
       }
@@ -144,7 +158,7 @@ function Install-TPAMPackage {
           # Verify that the file has been created
           $veri = Get-Item -ErrorAction SilentlyContinue "${Target}"
           if ($veri) {
-            Write-Cache -Item $veri.fullname -PackageName $controlHash['package'] -PackageVersion $controlHash['version']
+            Write-Cache -Item $veri.fullname -PackageName $controlHash['Name'] -PackageVersion $controlHash['version']
           }
         }
       }
@@ -225,7 +239,7 @@ Function New-TPAMPackage {
   $OutFile = $OutFile -Replace "${DEFAULTCOMPRESS}$", ""
 
   # Now let's check if the BuildDirectory contains the required directories and files
-  # It must have a /TPAMBUILD/CONTROL file
+  # It must have a /TPAMBUILD/control file
   # It _can_ have 
   # - /TPAMBUILD/postinst
   # - /TPAMBUILD/preinst
@@ -241,11 +255,11 @@ Function New-TPAMPackage {
   #
   # 1: CONTROL file
   #
-  $controlFile = Get-Item -ErrorAction SilentlyContinue ($bd + "/CONTROL*")
+  $controlFile = Get-Item -ErrorAction SilentlyContinue ($bd + "/control*")
   $controlDict = @{}
   $mustexit = $False
   if ( ($controlFile) ) {
-    if ( (Get-Item -ErrorAction SilentlyContinue -Path $controlFile | Where-Object -Property BaseName -Match "^CONTROL" | Measure-Object).Count -eq 1 ) {
+    if ( (Get-Item -ErrorAction SilentlyContinue -Path $controlFile | Where-Object -Property BaseName -Match "^control" | Measure-Object).Count -eq 1 ) {
     }
     # These exists a CONTROL file and only one
   } else {
@@ -280,7 +294,7 @@ Function New-TPAMPackage {
     $NewPackageName = ($OutFile+"-"+$controlHash['version'] + $PKGEXTENSION)
   }
 
-  Write-Verbose ("Writing to file " + $NewPackageName)
+  Write-Verbose ("Will build package [" + $NewPackageName + "]")
   # Check if TMPFILE already exists. That could happen for unforseen reasons.
   Try {
     Compress-Archive -ErrorAction Stop -Path (($_mydir.fullname)+"/*") -DestinationPath ($TMPFILE) -Force
@@ -349,20 +363,20 @@ Function Export-TPAMBuildControl {
   }
 
   # Now verify that we have all the keys that are required
-  if ( ! $controlHash['Package'] ) {
-    Write-Verbose ("CONTROL file must contain Key 'Package'")
+  if ( ! $controlHash['Name'] ) {
+    Write-Host ("CONTROL file must contain Key 'Name'")
     Return $false
   }
   if ( ! $controlHash['Maintainer'] ) {
-    Write-Verbose ("CONTROL file must contain Key 'Maintainer'")
+    Write-Host ("CONTROL file must contain Key 'Maintainer'")
     Return $false
   }
   if ( ! $controlHash['Description'] ) {
-    Write-Verbose ("CONTROL file must contain Key 'Description'")
+    Write-Host ("CONTROL file must contain Key 'Description'")
     Return $false
   }
   if ( ! $controlHash['Version'] ) {
-    Write-Verbose ("CONTROL file must contain Key 'Version'")
+    Write-Host ("CONTROL file must contain Key 'Version'")
     Return $false
   }
 
@@ -375,13 +389,24 @@ Function Export-TPAMBuildControl {
 
 # This returns a Hash of global variables in this module
 Function Get-PrivateVariables {
+  # Check if the tmp variable exists
+  if ( Test-Path '/windows/temp' ) {
+    $_TD = '/windows/temp'
+  } elseif ( Test-Path '/temp' ) {
+    $_TD = '/temp'
+  } elseif ( Test-Path '/tmp' ) {
+    $_TD = '/tmp'
+  } else {
+    Write-Error ("Could not detect any suitable temp directory. Cannot continue")
+    exit (666)
+  }
   Return @{
     "TPAMBUILD"       = "TPAMBUILD"
     "PKGEXTENSION"    = ".tpam"
     "DEFAULTCOMPRESS" = ".zip"
     "RUNID"           = Get-Random(99999999)
-    "TMPDIR"          = "/windows/temp"
-    "CACHE"           = "/program files/Tranquil Package Manager/cache"
+    "TMPDIR"          = $_TD
+    "CACHE"           = "/programdata/Tranquil Package Manager/cache"
     "SCRIPTEXT"       = @(".txt", ".ps1", ".tpam", "")
   }
 }
@@ -402,12 +427,13 @@ Function Write-Cache {
   # Only update the cache if this is not a protected item
   #
   if ( ! (Test-ProtectedItem -Item $Item) ) {
+    write-host ("Working on: " + $Item)
     $privvars       = Get-PrivateVariables
 
     $itemtype     = 'unused'
     $itemMetaData = @{
       'type'    = $itemtype
-      'hash'    = (Get-FileHash $Item).Hash
+      'hash'    = (Get-FileHash -ErrorAction SilentlyContinue $Item).Hash
       'name'    = ($Item)
       'version'  = $PackageVersion
     }
@@ -444,6 +470,8 @@ Function Write-Cache {
     $cacheFile = ($privvars['CACHE']+"/"+"${PackageName}")
     Write-Verbose ("Updating Cache: " + $cacheFile)
     $_cache | ConvertTo-Json | Out-File -Encoding utf8 -FilePath $cacheFile
+  } else {
+    write-host ("Schnarf ! " + $ITEM)
   }
 }
 
@@ -477,14 +505,15 @@ Function Get-Cache {
 #
 Function Get-ProtectedItems {
   $protec = @(
-    '^[\\/]*program files[\\/]*$'
-    '^[\\/]*program files (x86)^[\\/]*$'
-    '^[\\/]*windows^[\\/]*$'
-    '^[\\/]*users^[\\/]*$'
-    '^[\\/]*system32^[\\/]*$'
-    '^[\\/]*temp^[\\/]*$'
-    '^c:[\\/]*$'
-    '^[\\/]+$'
+    '^[/\\]*program files[/\\]*$'
+    '^[/\\]*program files (x86)^[/\\]*$'
+    '^[/\\]*programdata^[/\\]*$'
+    '^[/\\]*windows^[/\\]*$'
+    '^[/\\]*users^[/\\]*$'
+    '^[/\\]*system32^[/\\]*$'
+    '^[/\\]*temp^[/\\]*$'
+    '^c:[/\\]*$'
+    '^[/\\]+$'
   )
   Return $protec
 }
