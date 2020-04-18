@@ -22,6 +22,7 @@
   Only prints out what to do, but does not actually do it
 #>
 Function Update-Tranquil {
+  [cmdletbinding()]
   Param (
     [String]$SourceDirectory
   )
@@ -71,12 +72,14 @@ Function Update-Tranquil {
   Only prints out what to do, but does not actually do it
 #>
 Function Get-TranquilPackage {
+  [cmdletbinding()]
   Param (
-    [String]$Name,
+    $Package,
     [Switch]$Installed,
     [Switch]$ListContents
   )
 
+  Write-Verbose ("Searching if package [${Package}] is installed on local system")
 
   # TODO: Create something to read from external repo's here!
   $AllPackages = @()
@@ -89,20 +92,41 @@ Function Get-TranquilPackage {
     if ($CacheDirItems) {  
       # The Cache files are JSON objects, however...
       # Not all files in the CacheDir might be JSON objects. Some may have been corrupted
-      # Plan for that
+      # Plan and test for that
+
+      # If specific packages have been requested, only return those. Else return everything
+      if ( ! $Package ) {
+        $AddContents = $True
+      }
       $CacheDirItems | Foreach-Object {
+        $_thisitem = $_
         $fileContents = Get-Content $_ | ConvertFrom-Json 
+        # Check if the cache file actually contains any contents
         if ( $fileContents ) {
-          $_version = $fileContents.($privvars['METAKEY']).version
-          if ( ! $_version ) {
-            $_version = 'unknown'
-          } 
-          $_contents = New-Object PSObject
-          $_contents | Add-Member -MemberType NoteProperty -Name Name -Value $_.name
-          $_contents | Add-Member -MemberType NoteProperty -Name Version -Value $fileContents.($privvars['METAKEY']).version
-          $_contents | Add-Member -MemberType NoteProperty -Name LastUpdatedTime -Value $_.lastupdatedtime
-          $_contents | Add-Member -MemberType NoteProperty -Name Type -Value $_.type
-          $AllPackages += $_contents
+          if ( $Package ) {
+            $Package | Foreach-Object {
+              if ( ($_thisitem.basename).ToLower() -Match ($_).ToLower() ) {
+                $AddContents = $True
+              }
+            }
+          }
+          if ($AddContents) {
+          Write-Verbose ("Found package based on search criteria: " + ($_thisitem.basename).ToLower())
+            $_version = $fileContents.($privvars['METAKEY']).version
+            if ( ! $_version ) {
+              $_version = 'unknown'
+            } 
+            $_contents = New-Object PSObject
+            $_contents | Add-Member -MemberType NoteProperty -Name Name -Value $_.name
+            $_contents | Add-Member -MemberType NoteProperty -Name Version -Value $fileContents.($privvars['METAKEY']).version
+            $_contents | Add-Member -MemberType NoteProperty -Name LastUpdatedTime -Value $_.lastupdatedtime
+            $_contents | Add-Member -MemberType NoteProperty -Name Type -Value $_.type
+            $AllPackages += $_contents
+          }
+        }
+        # Reset the output if specific packages are queried
+        if ( $Package ) {
+          $AddContents = $False
         }
       }
     }
@@ -142,6 +166,7 @@ Function Get-TranquilPackage {
   Only prints out what to do, but does not actually do it
 #>
 Function Install-TranquilPackage {
+  [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$File,
     [String]$Root = "/",
@@ -179,24 +204,28 @@ Function Install-TranquilPackage {
 
   # Importing the CONTROL metadata
   $controlHash = Export-TranquilBuildControl -ControlFilePath ("${TMPDIR}/"+$privvars['TRANQUILBUILD']+"/control")
+  $PackageName = $controlHash['Package']
+  if ( ! $PackageName ) {
+    Write-Error ("Package is corrupt. Cannot find value 'Package' in control file")
+    break
+  }
 
   # Get the latest cache info
   Write-Verbose ("Reading cache from possible previous installs") 
-  $currentCache = Get-Cache -PackageName $controlHash['Name']
+  $currentCache = Get-Cache -PackageName $PackageName
 
   if ( $currentCache.ContainsKey('meta') ) {
     if ( ($currentCache['meta'].version) -eq ($controlHash['version']) ) {
       if ( $ReInstall ) {
         Write-Verbose ("ReInstall flag detected. Will overwrite existing installation")
       } else {
-        Write-Host ('[' + $controlHash['Name'] + "-" + $controlHash['version'] + "] is already installed. Use -ReInstall to reinstall")
+        Write-Host ('[' + $PackageName + "-" + $controlHash['version'] + "] is already installed. Use -ReInstall to reinstall")
         Break
       }
     }
   } 
 
   # Perform preinst scripts
-  # write-host ("----> " + ($TMPDIR + "/"+$privvars['TRANQUILBUILD'] + "/"))
   $preinst = Get-ChildItem -ErrorAction SilentlyContinue ($TMPDIR + "/"+$privvars['TRANQUILBUILD'] + "/") | ? name -match ("^preinst")
   if ( $preinst ) {
     Write-Verbose ("Found and running preinst script") 
@@ -233,7 +262,7 @@ Function Install-TranquilPackage {
           Write-Error ("Could not create item [$Target]. Ensure you are running Installer as Administrator!") 
           exit (665)
         }
-        Write-Cache -Item ("${Target}") -PackageName $controlHash['Name'] -PackageVersion $controlHash['version']
+        Write-Cache -Item ("${Target}") -PackageName $PackageName -PackageVersion $controlHash['version']
       }
     }
 
@@ -248,7 +277,7 @@ Function Install-TranquilPackage {
           Write-Verbose ("Ensuring creation of directory (2): " + $Target)
           $newitem = New-Item -ErrorAction SilentlyContinue -ItemType Directory -Path "${Target}" 
           # if ($newitem) {
-          Write-Cache -Item ("${Target}") -PackageName $controlHash['Name'] -PackageVersion $controlHash['version']
+          Write-Cache -Item ("${Target}") -PackageName $PackageName -PackageVersion $controlHash['version']
           #}
         }
       }
@@ -276,7 +305,7 @@ Function Install-TranquilPackage {
           # Verify that the file has been created
           $veri = Get-Item -ErrorAction SilentlyContinue "${Target}"
           if ($veri) {
-            Write-Cache -Item $veri.fullname -PackageName $controlHash['Name'] -PackageVersion $controlHash['version']
+            Write-Cache -Item $veri.fullname -PackageName $PackageName -PackageVersion $controlHash['version']
           }
         }
       }
@@ -292,11 +321,35 @@ Function Install-TranquilPackage {
     Write-Warning ("PostInst Not implemented yet") 
   }
 
-
-  # $_mydir     = Get-Item -ErrorAction SilentlyContinue $BuildDirectory
-  # $_mybuild   = Get-Item -ErrorAction SilentlyContinue ($BuildDirectory + "/"+$TRANQUILBUILD+"/" )
   Remove-Item -ErrorAction SilentlyContinue $TMPFILE
-  # Remove-Item -Recurse -ErrorAction SilentlyContinue $TMPDIR
+}
+
+<#
+ .Synopsis
+  Will uninstall installed tranquil package
+
+ .Description
+  Will search and remove all files installed by the tranquil package
+
+ .Example
+  # Quite easy
+  UnInstall <packagename>
+  
+ .Parameter Verbose
+  Prints out Verbose information during run
+
+ .Parameter WhatIf
+  Only prints out what to do, but does not actually do it
+#>
+Function Uninstall-TranquilPackage {
+  [cmdletbinding()]
+  Param (
+    [Parameter(Mandatory=$True)]$TranquilPackage
+  )
+
+  # First test to see if the package is actually installed on the system
+  Write-Verbose ("Checking if package is installed ...")
+  Write-Host (" --- THIS FUNCTION IS NOT FINISHED ---" )
 }
 
 <#
@@ -320,6 +373,7 @@ Function Install-TranquilPackage {
   Only prints out what to do, but does not actually do it
 #>
 Function New-TranquilPackage {
+  [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$BuildDirectory,
     [String]$OutFile
@@ -449,6 +503,7 @@ Function New-TranquilPackage {
 # This is a private function to check and validate that the CONTROL file
 # has correct contents and is valid
 Function Export-TranquilBuildControl {
+  [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$ControlFilePath
   )
@@ -482,8 +537,8 @@ Function Export-TranquilBuildControl {
   }
 
   # Now verify that we have all the keys that are required
-  if ( ! $controlHash['Name'] ) {
-    Write-Host ("CONTROL file must contain Key 'Name'")
+  if ( ! $controlHash['Package'] ) {
+    Write-Host ("CONTROL file must contain Key 'Package'")
     Return $false
   }
   if ( ! $controlHash['Maintainer'] ) {
@@ -539,6 +594,7 @@ Function Get-PrivateVariables {
 # This handles registering and de-registering of created items in Cache
 #
 Function Write-Cache {
+  [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$Item,
     [Parameter(Mandatory=$True)][String]$PackageName,
@@ -546,34 +602,38 @@ Function Write-Cache {
     [Switch]$Directory
   )
 
-
   #
   # Only update the cache if this is not a protected item
   #
   if ( ! (Test-ProtectedItem -Item $Item) ) {
-    write-host ("Working on: " + $Item)
+    # write-host -ForegroundColor Blue ("Working on: " + $Item)
     $privvars       = Get-PrivateVariables
 
     $itemtype     = 'unused'
     $itemMetaData = @{
       'type'    = $itemtype
       'hash'    = (Get-FileHash -ErrorAction SilentlyContinue $Item).Hash
+      'item'    = ($Item)
       'name'    = ($Item)
+      'name_is_deprecated'    = ($Item)
       'version'  = $PackageVersion
     }
     $meta = @{
       version     = $PackageVersion
+      package     = $PackageName
     }
 
     # Gets existing cache or create new cache
-     $_cache = Get-Cache -PackageName $PackageName
+    $_cache = Get-Cache -PackageName $PackageName
     if ( ! $_cache ) {
+      Write-Verbose ("No cache file found for ${PackageName}")
       $_cache = @{}
     }
 
     # Create or update meta content
     if ($_cache.ContainsKey($privvars['METAKEY'])) {
       $_cache[$privvars['METAKEY']].version = $PackageVersion
+      # $_cache[$privvars['METAKEY']].package = $PackageName.ToLower()
     } else {
       $_cache.Add($privvars['METAKEY'], $meta)
     }
@@ -604,6 +664,7 @@ Function Write-Cache {
 # Retrieve the Cache as a HASH where filename/directoryname is the key
 #
 Function Get-Cache {
+  [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$PackageName
   )
@@ -647,6 +708,7 @@ Function Get-ProtectedItems {
 # Returns false if not
 #
 Function Test-ProtectedItem {
+  [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$Item
   )
@@ -666,6 +728,7 @@ Function Test-ProtectedItem {
 # Just a simple Write-Host wrapper to add WhatIf colours and output
 #
 Function Write-WhatIf {
+  [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$Message,
     [ValidateSet("Cyan", "Pink")][String]$ForegroundColor = "Cyan"
@@ -675,5 +738,6 @@ Function Write-WhatIf {
 
 Export-ModuleMember -Function New-TranquilPackage
 Export-ModuleMember -Function Install-TranquilPackage
+Export-ModuleMember -Function UnInstall-TranquilPackage
 Export-ModuleMember -Function Get-TranquilPackage
 Export-ModuleMember -Function Update-Tranquil

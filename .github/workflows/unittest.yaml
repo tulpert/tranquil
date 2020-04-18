@@ -22,12 +22,26 @@ jobs:
     # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
     - uses: actions/checkout@v2
 
-    # Runs a single command using the runners shell
     - name: Testing Get-Tranquil
-      run: echo "Import-Module ./PowerShellModules/Tranquil; Get-TranquilPackage -Verbose" | pwsh
+      run: echo "Import-Module -Force ./PowerShellModules/Tranquil; Update-Tranquil -Verbose" | pwsh
 
-    - name: Testing Get-Tranquil2
-      run: echo "Import-Module ${GITHUB_WORKSPACE}/PowerShellModules/Tranquil; Get-TranquilPackage" | pwsh
+    - name: Testing New-Tranquil Basic
+      run: echo "Import-Module -Force ./PowerShellModules/Tranquil; New-TranquilPackage -Verbose ./examples/tranquil-easypackage" | pwsh
+
+    - name: Testing Get-Tranquil
+      run: echo "Import-Module -Force ./PowerShellModules/Tranquil; Install-TranquilPackage -Verbose tranquil-easypackage*" | pwsh
+
+    - name: Testing Get-Tranquil Return testpackage
+      run: echo "Import-Module -Force ./PowerShellModules/Tranquil; Get-TranquilPackage -Verbose tranquil-easypackage" | pwsh
+
+    - name: Testing Get-Tranquil Return testpackage short
+      run: echo "Import-Module -Force ./PowerShellModules/Tranquil; Get-TranquilPackage -Verbose easypack" | pwsh
+
+    - name: Testing Get-Tranquil Return testpackage multiple
+      run: echo "Import-Module -Force ./PowerShellModules/Tranquil; Get-TranquilPackage -Verbose easypack, something-else" | pwsh
+
+    - name: Testing Get-Tranquil Return All
+      run: echo "Import-Module -Force ./PowerShellModules/Tranquil; Get-TranquilPackage -Verbose " | pwsh
 
     # Runs a single command using the runners shell
     - name: Run a one-line script
