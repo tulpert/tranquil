@@ -6,7 +6,7 @@ name: TranquilUnitTest
 # events but only for the master branch
 on:
   push:
-    branches: [ master, temp ]
+    branches: [ master, dev ]
   pull_request:
     branches: [ master ]
 
@@ -22,7 +22,7 @@ jobs:
     # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
     - uses: actions/checkout@v2
 
-    - name: Run a multi-line script
+    - name: Checking the environment
       run: |
         echo "------------------"
         echo $GITHUB_WORKSPACE
@@ -40,7 +40,7 @@ jobs:
       run: echo "Import-Module -Force ./PowerShellModules/Tranquil; New-TranquilPackage -Verbose ./examples/tranquil-easypackage" | pwsh
 
     - name: Testing Get-Tranquil
-      run: echo "Import-Module -Force ./PowerShellModules/Tranquil; Install-TranquilPackage -Verbose tranquil-easypackage*" | pwsh
+      run: echo "Import-Module -Force ./PowerShellModules/Tranquil; Install-TranquilPackage -Verbose tranquil-easypackage*" | sudo pwsh
 
     - name: Testing Get-Tranquil Return testpackage
       run: echo "Import-Module -Force ./PowerShellModules/Tranquil; Get-TranquilPackage -Verbose tranquil-easypackage" | pwsh
