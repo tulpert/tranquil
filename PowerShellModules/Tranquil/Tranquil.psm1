@@ -1,7 +1,50 @@
-Function Get-TPAMPackage {
+<#
+ .Synopsis
+  Will update the Tranquil cache and list of available packages to install
+
+ .Description
+  Will update the Tranquil cache and list of available packages to install
+
+ .Example
+  # Quite easy
+  Update-Tranquil 
+  
+ .Parameter SourceDirectory
+  Path to the directory containing the .list packages. By default, Tranquil will search in c:/programdata/tranquil/sources or /etc/tranquil/sources
+
+ .Parameter Verbose
+  Prints out Verbose information during run
+
+ .Parameter Force
+  Forces the install even if errors have been detected or access rights (run as Administrator) are not in place
+
+ .Parameter WhatIf
+  Only prints out what to do, but does not actually do it
+#>
+Function Update-Tranquil {
   Param (
-    [Switch]$Installed
+    [String]$SourceDirectory
   )
+
+  $privvars       = Get-PrivateVariables
+
+  if ( $SourceDirectory ) {
+    $Sources = @($SourceDirectory, $privvars['SOURCEDIRS'])
+  } else {
+    $Sources = $privvars['SOURCEDIRS']
+  }
+
+  Write-Host ( $Sources )
+}
+
+
+Function Get-TranquilPackage {
+  Param (
+    [String]$Name,
+    [Switch]$Installed,
+    [Switch]$ListContents
+  )
+
 
   # TODO: Create something to read from external repo's here!
   $AllPackages = @()
@@ -16,32 +59,38 @@ Function Get-TPAMPackage {
       # Not all files in the CacheDir might be JSON objects. Some may have been corrupted
       # Plan for that
       $CacheDirItems | Foreach-Object {
-      #   $_
         $fileContents = Get-Content $_ | ConvertFrom-Json 
         if ( $fileContents ) {
-          # $fileContents
-          $AllPackages += $fileContents
+          $_version = $fileContents.($privvars['METAKEY']).version
+          if ( ! $_version ) {
+            $_version = 'unknown'
+          } 
+          $_contents = New-Object PSObject
+          $_contents | Add-Member -MemberType NoteProperty -Name Name -Value $_.name
+          $_contents | Add-Member -MemberType NoteProperty -Name Version -Value $fileContents.($privvars['METAKEY']).version
+          $_contents | Add-Member -MemberType NoteProperty -Name LastUpdatedTime -Value $_.lastupdatedtime
+          $_contents | Add-Member -MemberType NoteProperty -Name Type -Value $_.type
+          $AllPackages += $_contents
         }
       }
     }
   }
 
-  $AllPackages
-  
+  $AllPackages # .PSObject.Properties.Name
 }
 
 <#
  .Synopsis
-  Will extract and install a .tpam file onto Windows systems
+  Will extract and install a Tranquil file onto Windows systems
 
  .Description
-  Takes .tpam file as input, extracts content and runs installation routine
+  Takes .tp/.tpam/.tranquil file as input, extracts content and runs installation routine
 
  .Example
   # Quite easy
-  Install-TPAMPackage package_file.tpam
+  Install-TranquilPackage <package_file>
   
- .Parameter TPAMPackage
+ .Parameter File
   Path to the package file. This is the default parameter.
 
  .Parameter ReInstall
@@ -56,9 +105,9 @@ Function Get-TPAMPackage {
  .Parameter WhatIf
   Only prints out what to do, but does not actually do it
 #>
-Function Install-TPAMPackage {
+Function Install-TranquilPackage {
   Param (
-    [Parameter(Mandatory=$True)][String]$TPAMPackage,
+    [Parameter(Mandatory=$True)][String]$File,
     [String]$Root = "/",
     [Switch]$Force,
     [Switch]$WhatIf,
@@ -66,24 +115,25 @@ Function Install-TPAMPackage {
   )
   if ( ! ((whoami) -match "root|administrator") -or ($Force) ) {
     Write-Error ("You should run installer as Administrator! Use -Force to override at your own risk.")
+    break
   }
 
   # Get the module's private variables
   $privvars       = Get-PrivateVariables
-  $MYRANDOM       = "tpam_tmp_" + $privvars['RUNID']
+  $MYRANDOM       = "tranquil_tmp_" + $privvars['RUNID']
   $TMPDIR         = $privvars['TMPDIR'] + "/" + $MYRANDOM
   $TMPFILE        = $TMPDIR + ".tmp.zip"
 
   # First check if the file being references for installation actually exists
-  $installfile = Get-Item -ErrorAction SilentlyContinue $TPAMPackage
+  $installfile = Get-Item -ErrorAction SilentlyContinue $File
   if ( ! ( ($installfile) -And ($installfile.PSIsContainer -eq $False )) ) {
-    Write-Error ("Installation package not found: " + [string]$TPAMPackage)
+    Write-Error ("Installation package not found: " + [string]$File)
     Break
   }
 
   Write-Verbose ("Using TMP file: " + ${TMPFILE})
   Write-Verbose ("Using DIR directory: " + ${TMPDIR})
-  Copy-Item $TPAMPackage $TMPFile
+  Copy-Item $File $TMPFile
   Expand-Archive -ErrorAction SilentlyContinue -Path $TMPFILE -DestinationPath $TMPDIR
   $TMPDirObject   = Get-Item -ErrorAction SilentlyContinue $TMPDIR
   if ( ! $TMPDirObject ) {
@@ -92,7 +142,7 @@ Function Install-TPAMPackage {
   }
 
   # Importing the CONTROL metadata
-  $controlHash = Export-TPAMBuildControl -ControlFilePath ("${TMPDIR}/"+$privvars['TPAMBUILD']+"/control")
+  $controlHash = Export-TranquilBuildControl -ControlFilePath ("${TMPDIR}/"+$privvars['TRANQUILBUILD']+"/control")
 
   # Get the latest cache info
   Write-Verbose ("Reading cache from possible previous installs") 
@@ -110,8 +160,8 @@ Function Install-TPAMPackage {
   } 
 
   # Perform preinst scripts
-  # write-host ("----> " + ($TMPDIR + "/"+$privvars['TPAMBUILD'] + "/"))
-  $preinst = Get-ChildItem -ErrorAction SilentlyContinue ($TMPDIR + "/"+$privvars['TPAMBUILD'] + "/") | ? name -match ("^preinst")
+  # write-host ("----> " + ($TMPDIR + "/"+$privvars['TRANQUILBUILD'] + "/"))
+  $preinst = Get-ChildItem -ErrorAction SilentlyContinue ($TMPDIR + "/"+$privvars['TRANQUILBUILD'] + "/") | ? name -match ("^preinst")
   if ( $preinst ) {
     Write-Verbose ("Found and running preinst script") 
     Write-Warning ("PreInst Not implemented yet") 
@@ -128,7 +178,7 @@ Function Install-TPAMPackage {
   #
   Write-Verbose ("Starting install")
   $MoveThis = Get-ChildItem -ErrorAction SilentlyContinue $TMPDIR
-  $MoveThis | ? -Property Name -NotMatch ("^" + $privvars['TPAMBUILD'] + "$") |  % {
+  $MoveThis | ? -Property Name -NotMatch ("^" + $privvars['TRANQUILBUILD'] + "$") |  % {
     # 1
     # Create any base directories
     # It's stupid having to replicate code like this. If you find any clever workaround, that'd be great
@@ -138,7 +188,7 @@ Function Install-TPAMPackage {
       if ( $WhatIf ) {
         Write-WhatIf ("Want to create: " + $Target)
       } else {
-        Write-Verbose ("Ensuring creation of directory (1): " + $Target)
+        Write-Verbose ("Ensuring temp directory exists and is writable: " + $Target)
         if ( ! (Test-Path $Target) ) {
           Write-Verbose ("Creating: " + $Target)
           $newitem = New-Item -ErrorAction SilentlyContinue -ItemType Directory -Path "${Target}" 
@@ -200,7 +250,7 @@ Function Install-TPAMPackage {
   Write-Verbose ("Done install")
 
   # Perform postinst scripts
-  $postinst = Get-ChildItem -ErrorAction SilentlyContinue ($TMPDIR + "/"+$privvars['TPAMBUILD'] + "/") | ? name -match ("^postinst")
+  $postinst = Get-ChildItem -ErrorAction SilentlyContinue ($TMPDIR + "/"+$privvars['TRANQUILBUILD'] + "/") | ? name -match ("^postinst")
   if ( $postinst ) {
     Write-Verbose ("Found and running postinst script") 
     Write-Warning ("PostInst Not implemented yet") 
@@ -208,22 +258,21 @@ Function Install-TPAMPackage {
 
 
   # $_mydir     = Get-Item -ErrorAction SilentlyContinue $BuildDirectory
-  # $_mybuild   = Get-Item -ErrorAction SilentlyContinue ($BuildDirectory + "/"+$TPAMBUILD+"/" )
+  # $_mybuild   = Get-Item -ErrorAction SilentlyContinue ($BuildDirectory + "/"+$TRANQUILBUILD+"/" )
   Remove-Item -ErrorAction SilentlyContinue $TMPFILE
   # Remove-Item -Recurse -ErrorAction SilentlyContinue $TMPDIR
 }
 
 <#
  .Synopsis
-  Will create .tpam package from correctly structure build folder hierarcy.
+  Will create .tp package from correctly structure build folder hierarcy.
 
  .Description
   Expects parameter to be a folder with the correct file contents. Refer to documentation xxxx for details
-  All scripts can have extension .txt, .ps1, .tpam or nothing
 
  .Example
   # Quite easy
-  New-TPAMPackage <build_directory>
+  New-TranquilPackage <build_directory>
   
  .Parameter BuildDirectory
   Path to the build directory. This is the default parameter.
@@ -234,7 +283,7 @@ Function Install-TPAMPackage {
  .Parameter WhatIf
   Only prints out what to do, but does not actually do it
 #>
-Function New-TPAMPackage {
+Function New-TranquilPackage {
   Param (
     [Parameter(Mandatory=$True)][String]$BuildDirectory,
     [String]$OutFile
@@ -242,16 +291,16 @@ Function New-TPAMPackage {
 
   # Get the module's private variables
   $vars = Get-PrivateVariables
-  $TPAMBUILD        = $vars['TPAMBUILD']
+  $TRANQUILBUILD    = $vars['TRANQUILBUILD']
   $PKGEXTENSION     = $vars['PKGEXTENSION']
   $DEFAULTCOMPRESS  = $vars['DEFAULTCOMPRESS']
   $RUNID            = $vars['RUNID']
-  $TMPFILE          = $vars['TMPDIR'] + "/tpam_tmp_" + $RUNID + ".tmp" + $DEFAULTCOMPRESS
+  $TMPFILE          = $vars['TMPDIR'] + "/tranquil_tmp_" + $RUNID + ".tmp" + $DEFAULTCOMPRESS
 
   Write-Verbose ("Using TMP file: " + ${TMPFILE})
 
   $_mydir     = Get-Item -ErrorAction SilentlyContinue $BuildDirectory
-  $_mybuild   = Get-Item -ErrorAction SilentlyContinue ($BuildDirectory + "/"+$TPAMBUILD+"/" )
+  $_mybuild   = Get-Item -ErrorAction SilentlyContinue ($BuildDirectory + "/"+$TRANQUILBUILD+"/" )
 
   # Check if the BuildDirectory is a valid directory
   if ( ($_mydir.PSIsContainer) -And ($_mybuild.PSIsContainer) ) {
@@ -271,18 +320,18 @@ Function New-TPAMPackage {
   $OutFile = $OutFile -Replace "${DEFAULTCOMPRESS}$", ""
 
   # Now let's check if the BuildDirectory contains the required directories and files
-  # It must have a /TPAMBUILD/control file
+  # It must have a /TRANQUIL/control file
   # It _can_ have 
-  # - /TPAMBUILD/postinst
-  # - /TPAMBUILD/preinst
-  # - /TPAMBUILD/postrm
-  # - /TPAMBUILD/prerm
+  # - /TRANQUIL/postinst
+  # - /TRANQUIL/preinst
+  # - /TRANQUIL/postrm
+  # - /TRANQUIL/prerm
   #
   # We will check if these files exist with _any_ fileending.
   #
 
   # Store the BUILD directory as a variable
-  $bd = ($_mydir.FullName + "/" + $TPAMBUILD)
+  $bd = ($_mydir.FullName + "/" + $TRANQUILBUILD)
 
   #
   # 1: CONTROL file
@@ -311,7 +360,7 @@ Function New-TPAMPackage {
     Break
   }
 
-  $controlHash = Export-TPAMBuildControl -ControlFilePath $controlFile.FullName
+  $controlHash = Export-TranquilBuildControl -ControlFilePath $controlFile.FullName
 
 
   if ($controlHash -And $controlHash.count -gt 0) {
@@ -363,7 +412,7 @@ Function New-TPAMPackage {
 
 # This is a private function to check and validate that the CONTROL file
 # has correct contents and is valid
-Function Export-TPAMBuildControl {
+Function Export-TranquilBuildControl {
   Param (
     [Parameter(Mandatory=$True)][String]$ControlFilePath
   )
@@ -434,14 +483,19 @@ Function Get-PrivateVariables {
     Write-Error ("Could not detect any suitable temp directory. Cannot continue")
     exit (666)
   }
+  $ProgramData        = '/programdata/tranquil'
   Return @{
-    "TPAMBUILD"       = "TPAMBUILD"
-    "PKGEXTENSION"    = ".tpam"
+    "TRANQUILBUILD"   = "TRANQUIL"
+    "PKGEXTENSION"    = ".tp"
     "DEFAULTCOMPRESS" = ".zip"
     "RUNID"           = Get-Random(99999999)
     "TMPDIR"          = $_TD
-    "CACHE"           = "/programdata/tranquil/cache"
-    "SCRIPTEXT"       = @(".txt", ".ps1", ".tpam", "")
+    "CACHE"           = "${ProgramData}/cache"
+    "STATEFILE"       = "${ProgramData}/statefile"
+    "SOURCESDIR"      = "${ProgramData}/sources"
+    "METAKEY"         = "__tranquilmeta__"
+    "SCRIPTEXT"       = @(".txt", ".ps1", ".tp", , ".py", ".tpam", "")   # Not sure i will use this one
+    "SOURCEDIRS"      = @("${ProgramData}/sources", '/etc/tranquil/sources', '~/.tranquil')
   }
 }
 
@@ -482,10 +536,10 @@ Function Write-Cache {
     }
 
     # Create or update meta content
-    if ($_cache.ContainsKey('meta')) {
-      $_cache['meta'].version = $PackageVersion
+    if ($_cache.ContainsKey($privvars['METAKEY'])) {
+      $_cache[$privvars['METAKEY']].version = $PackageVersion
     } else {
-      $_cache.Add('meta', $meta)
+      $_cache.Add($privvars['METAKEY'], $meta)
     }
 
     if ( $_cache.containsKey($Item.tolower()) ) {
@@ -583,6 +637,7 @@ Function Write-WhatIf {
   Write-Host -ForegroundColor $ForegroundColor ("[WhatIf] " + $Message)
 }
 
-Export-ModuleMember -Function New-TPAMPackage
-Export-ModuleMember -Function Install-TPAMPackage
-Export-ModuleMember -Function Get-TPAMPackage
+Export-ModuleMember -Function New-TranquilPackage
+Export-ModuleMember -Function Install-TranquilPackage
+Export-ModuleMember -Function Get-TranquilPackage
+Export-ModuleMember -Function Update-Tranquil
