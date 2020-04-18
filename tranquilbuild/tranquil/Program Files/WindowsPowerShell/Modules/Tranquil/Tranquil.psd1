@@ -1,6 +1,6 @@
 @{
 RootModule = 'Tranquil.psm1'
-ModuleVersion = '1.0'
+ModuleVersion = '0.0.1'
 Author = 'me@tulpert.com'
 CompanyName = 'Tulpert'
 Copyright = 'GPL'
