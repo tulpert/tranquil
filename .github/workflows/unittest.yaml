@@ -24,7 +24,7 @@ jobs:
 
     # Runs a single command using the runners shell
     - name: Testing Get-Tranquil
-      run: echo "Import-Module ./PowerShellModules/Tranquil; Get-TranquilPackage" | pwsh
+      run: echo "Import-Module ./PowerShellModules/Tranquil; Get-TranquilPackage -Verbose" | pwsh
 
     - name: Testing Get-Tranquil2
       run: echo "Import-Module ${GITHUB_WORKSPACE}/PowerShellModules/Tranquil; Get-TranquilPackage" | pwsh

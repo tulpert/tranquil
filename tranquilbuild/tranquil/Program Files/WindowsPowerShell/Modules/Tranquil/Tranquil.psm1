@@ -33,11 +33,43 @@ Function Update-Tranquil {
   } else {
     $Sources = $privvars['SOURCEDIRS']
   }
-
-  Write-Host ( $Sources )
+  
+  # Iterate through all Sources Directories and look for .list files
+  # Then use those to update the local cache
+  $Sources | Foreach-Object {
+    $_source = $_
+    if ( Test-Path $_source ) {
+      Write-Host ( "Directory found. Loading .list files [${_source}]" )
+    }
+  } 
+  $Sources
+  Write-Host ("THIS FUNCITON IS NOT FINISHED")
 }
 
 
+<#
+ .Synopsis
+  Will get installed packages, their version and other metadata
+
+ .Description
+  Will get installed packages, their version and other metadata
+
+ .Example
+  # Quite easy
+  Get-Tranquil 
+  
+ .Parameter SourceDirectory
+  Path to the directory containing the .list packages. By default, Tranquil will search in c:/programdata/tranquil/sources or /etc/tranquil/sources
+
+ .Parameter Verbose
+  Prints out Verbose information during run
+
+ .Parameter Force
+  Forces the install even if errors have been detected or access rights (run as Administrator) are not in place
+
+ .Parameter WhatIf
+  Only prints out what to do, but does not actually do it
+#>
 Function Get-TranquilPackage {
   Param (
     [String]$Name,
@@ -76,7 +108,11 @@ Function Get-TranquilPackage {
     }
   }
 
-  $AllPackages # .PSObject.Properties.Name
+  if ( $AllPackages ) {
+    $AllPackages # .PSObject.Properties.Name
+  } else {
+    Write-Verbose "No Packages found on this system"
+  }
 }
 
 <#
