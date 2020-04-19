@@ -74,12 +74,12 @@ Function Update-Tranquil {
 Function Get-TranquilPackage {
   [cmdletbinding()]
   Param (
-    $Package,
+    $Name,
     [Switch]$Installed,
     [Switch]$ListContents
   )
 
-  Write-Verbose ("Searching if package [${Package}] is installed on local system")
+  Write-Verbose ("Searching if package [${Name}] is installed on local system")
 
   # TODO: Create something to read from external repo's here!
   $AllPackages = @()
@@ -95,23 +95,28 @@ Function Get-TranquilPackage {
       # Plan and test for that
 
       # If specific packages have been requested, only return those. Else return everything
-      if ( ! $Package ) {
-        $AddContents = $True
-      }
+      # if ( ! $Name ) {
+      $AddContents = $False
+      # }
       $CacheDirItems | Foreach-Object {
         $_thisitem = $_
         $fileContents = Get-Content $_ | ConvertFrom-Json 
         # Check if the cache file actually contains any contents
         if ( $fileContents ) {
-          if ( $Package ) {
-            $Package | Foreach-Object {
+          $AddContents = $False
+          if ( $Name ) {
+            $Name | Foreach-Object {
               if ( ($_thisitem.basename).ToLower() -Match ($_).ToLower() ) {
+                Write-Verbose ("Found package based on search criteria: " + ($_thisitem.basename).ToLower())
                 $AddContents = $True
+              } else {
+                $AddContents = $False
               }
             }
+          } else {
+            $AddContents = $True
           }
           if ($AddContents) {
-          Write-Verbose ("Found package based on search criteria: " + ($_thisitem.basename).ToLower())
             $_version = $fileContents.($privvars['METAKEY']).version
             if ( ! $_version ) {
               $_version = 'unknown'
@@ -125,7 +130,7 @@ Function Get-TranquilPackage {
           }
         }
         # Reset the output if specific packages are queried
-        if ( $Package ) {
+        if ( $Name ) {
           $AddContents = $False
         }
       }
@@ -133,9 +138,10 @@ Function Get-TranquilPackage {
   }
 
   if ( $AllPackages ) {
-    $AllPackages # .PSObject.Properties.Name
+    $AllPackages
   } else {
-    Write-Verbose "No Packages found on this system"
+    Write-Verbose "No Packages based on search criteria found on this system"
+    return $False
   }
 }
 
@@ -174,6 +180,9 @@ Function Install-TranquilPackage {
     [Switch]$WhatIf,
     [Switch]$ReInstall
   )
+
+  $lpx="[Install] "
+
   if ( ! ((whoami) -match "root|administrator") -or ($Force) ) {
     Write-Error ("You should run installer as Administrator! Use -Force to override at your own risk.")
     break
@@ -192,8 +201,8 @@ Function Install-TranquilPackage {
     Break
   }
 
-  Write-Verbose ("Using TMP file: " + ${TMPFILE})
-  Write-Verbose ("Using DIR directory: " + ${TMPDIR})
+  Write-Verbose ($lpx+"Using TMP file: " + ${TMPFILE})
+  Write-Verbose ($lpx+"Using DIR directory: " + ${TMPDIR})
   Copy-Item $File $TMPFile
   Expand-Archive -ErrorAction SilentlyContinue -Path $TMPFILE -DestinationPath $TMPDIR
   $TMPDirObject   = Get-Item -ErrorAction SilentlyContinue $TMPDIR
@@ -211,13 +220,13 @@ Function Install-TranquilPackage {
   }
 
   # Get the latest cache info
-  Write-Verbose ("Reading cache from possible previous installs") 
-  $currentCache = Get-Cache -PackageName $PackageName
+  Write-Verbose ($lpx+"Reading cache from possible previous installs") 
+  $currentCache = Get-TranquilCache -PackageName $PackageName
 
   if ( $currentCache.ContainsKey('meta') ) {
     if ( ($currentCache['meta'].version) -eq ($controlHash['version']) ) {
       if ( $ReInstall ) {
-        Write-Verbose ("ReInstall flag detected. Will overwrite existing installation")
+        Write-Verbose ($lpx+"ReInstall flag detected. Will overwrite existing installation")
       } else {
         Write-Host ('[' + $PackageName + "-" + $controlHash['version'] + "] is already installed. Use -ReInstall to reinstall")
         Break
@@ -228,7 +237,7 @@ Function Install-TranquilPackage {
   # Perform preinst scripts
   $preinst = Get-ChildItem -ErrorAction SilentlyContinue ($TMPDIR + "/"+$privvars['TRANQUILBUILD'] + "/") | ? name -match ("^preinst")
   if ( $preinst ) {
-    Write-Verbose ("Found and running preinst script") 
+    Write-Verbose ($lpx+"Found and running preinst script") 
     Write-Warning ("PreInst Not implemented yet") 
   }
 
@@ -241,7 +250,7 @@ Function Install-TranquilPackage {
   # 3: TODO: Look at file ownerships and permissions
   # 4: TODO: Register all files and folders with md5sums in a registry somewhere for future un-installations
   #
-  Write-Verbose ("Starting install")
+  Write-Verbose ($lpx+"Starting install")
   $MoveThis = Get-ChildItem -ErrorAction SilentlyContinue $TMPDIR
   $MoveThis | ? -Property Name -NotMatch ("^" + $privvars['TRANQUILBUILD'] + "$") |  % {
     # 1
@@ -253,31 +262,31 @@ Function Install-TranquilPackage {
       if ( $WhatIf ) {
         Write-WhatIf ("Want to create: " + $Target)
       } else {
-        Write-Verbose ("Ensuring temp directory exists and is writable: " + $Target)
+        Write-Verbose ($lpx+"Ensuring temp directory exists and is writable: " + $Target)
         if ( ! (Test-Path $Target) ) {
-          Write-Verbose ("Creating: " + $Target)
+          Write-Verbose ($lpx+"Creating: " + $Target)
           $newitem = New-Item -ErrorAction SilentlyContinue -ItemType Directory -Path "${Target}" 
         }
         if ( ! (Test-Path $Target) ) {
           Write-Error ("Could not create item [$Target]. Ensure you are running Installer as Administrator!") 
           exit (665)
         }
-        Write-Cache -Item ("${Target}") -PackageName $PackageName -PackageVersion $controlHash['version']
+        Write-TranquilCache -Item ("${Target}") -PackageName $PackageName -PackageVersion $controlHash['version']
       }
     }
 
     # Now create subdirectories
-    # Write-Verbose ("Creating any new directories under: "  + $_.FullName)
+    # Write-Verbose ($lpx+"Creating any new directories under: "  + $_.FullName)
     Get-ChildItem -Recurse $_.FullName | % {
       $Target = ($_.Fullname).Replace($TMPDirObject.FullName, "")
       if ( $_.PSIsContainer ) {
         if ( $WhatIf ) {
           Write-WhatIf -ForegroundColor Cyan ("Want to create: " + $Target)
         } else {
-          Write-Verbose ("Ensuring creation of directory (2): " + $Target)
+          Write-Verbose ($lpx+"Ensuring creation of directory (2): " + $Target)
           $newitem = New-Item -ErrorAction SilentlyContinue -ItemType Directory -Path "${Target}" 
           # if ($newitem) {
-          Write-Cache -Item ("${Target}") -PackageName $PackageName -PackageVersion $controlHash['version']
+          Write-TranquilCache -Item ("${Target}") -PackageName $PackageName -PackageVersion $controlHash['version']
           #}
         }
       }
@@ -292,36 +301,68 @@ Function Install-TranquilPackage {
     Get-ChildItem -Recurse $_.FullName | % {
       if ( ! $_.PSIsContainer ) {
         $Source = $_.FullName
-      $Target = ($_.Fullname).Replace($TMPDirObject.FullName, "")
-      #   $newFile = ($_.Fullname).Replace($TMPDirObject.FullName, "")
+        $Target = ($_.Fullname).Replace($TMPDirObject.FullName, "")
         if  ( $WhatIf ) {
           Write-WhatIf ("Want to ensure: " + $Target)
         } else {
-          Write-Verbose ("Moving file into place: ${Source} --> ${Target}")
-          # TODO, Before moving - do a checksum to verify that the file was a part of the old package
-          # If not, and the file was created manually - throw a error/prompt for overwriting
-          Move-Item -ErrorAction SilentlyContinue "${Source}" "${Target}"
-          # $newitem = New-Item -ErrorAction SilentlyContinue -Path "${Target}" 
-          # Verify that the file has been created
-          $veri = Get-Item -ErrorAction SilentlyContinue "${Target}"
-          if ($veri) {
-            Write-Cache -Item $veri.fullname -PackageName $PackageName -PackageVersion $controlHash['version']
+          # TODO, Before installing - do a checksum to check if the file already exists and, if so, that the file was a part of the old package
+          $writeItem = $True
+          $oldItem = Get-Item -ErrorAction SilentlyContinue $Target 
+          if ( $oldItem ) {
+            # Item already exists. Check if it was part of an existing package
+            if ( $currentCache.ContainsKey($Target) ) {
+              # Item was already installed by this package. Check checksum
+              # If not, and the file was created manually - throw a error/prompt for overwriting
+              if ( $currentCache[$Target].Hash -NotMatch (Get-FileHash -ErrorAction SilentlyContinue $Target).Hash ) {
+                Write-Host ("Item [${Target}] has been changed from previous installation.")
+                $yN = 'PENGUIN'
+                While ( $yN -notmatch "^n$|^y$" ) {
+                  $yN = Read-Host (" Do you want to overwrite with new version (y/N)?")
+                  if ( $yN -match "^$" ) { $yN = 'n' } else {}
+                }
+                if ( $yN -match "^n$" ) { $writeItem = $False } else { Write-Verbose ($ltx+"Will overwrite with packaged version ...") }
+              }
+            } else {
+              # Item exists but is _not_ part of a known package
+              $backupfile = ($Target) + "_" + (Get-Random(100000))
+              Write-Host ("Creating backup of existing file: " + $backupfile)
+              Move-Item -Force -ErrorAction SilentlyContinue $Target $backupfile
+              $writeItem = $True
+            }
+          }
+          Write-Verbose ($lpx+"Moving file into place: ${Source} --> ${Target}")
+          if ( $writeItem ) {
+            $SourceHash = (Get-FileHash (Get-Item $Source)).Hash
+            Move-Item -Force -ErrorAction SilentlyContinue "${Source}" "${Target}"
+            # Verify that the file has been created
+            $veri = Get-Item -ErrorAction SilentlyContinue "${Target}"
+            $TargetHash = (Get-FileHash $veri).Hash
+            if ( $SourceHash -Like $TargetHash ) {
+              if ($veri) {
+                Write-TranquilCache -Item $veri.fullname -PackageName $PackageName -PackageVersion $controlHash['version']
+              } else {
+                Write-Warning ($ltx+"Could not verify the new file ["+($veri.FullName)+"] has been created ...")
+              }
+            } else {
+              Write-Warning ($ltx+"Could not verify the new filehash equals the packaged filehash ...")
+            }
           }
         }
       }
     }
 
   }
-  Write-Verbose ("Done install")
+  Write-Verbose ($lpx+"Done install")
 
   # Perform postinst scripts
   $postinst = Get-ChildItem -ErrorAction SilentlyContinue ($TMPDIR + "/"+$privvars['TRANQUILBUILD'] + "/") | ? name -match ("^postinst")
   if ( $postinst ) {
-    Write-Verbose ("Found and running postinst script") 
+    Write-Verbose ($lpx+"Found and running postinst script") 
     Write-Warning ("PostInst Not implemented yet") 
   }
 
   Remove-Item -ErrorAction SilentlyContinue $TMPFILE
+  Remove-Item -Recurse -ErrorAction SilentlyContinue $TMPDirObject
 }
 
 <#
@@ -335,6 +376,12 @@ Function Install-TranquilPackage {
   # Quite easy
   UnInstall <packagename>
   
+ .Parameter Force
+  Do not ask if you want to remove package
+
+ .Parameter ForceModified
+  Do not prompt if detecting modified items
+
  .Parameter Verbose
   Prints out Verbose information during run
 
@@ -344,12 +391,176 @@ Function Install-TranquilPackage {
 Function Uninstall-TranquilPackage {
   [cmdletbinding()]
   Param (
-    [Parameter(Mandatory=$True)]$TranquilPackage
+    [Parameter(Mandatory=$True)]$Name,
+    [Switch]$Force,
+    [Switch]$ForceModified
   )
+  # LogPrefix
+  $lpx="[Uninstall] "
+
+  $privvars       = Get-PrivateVariables
 
   # First test to see if the package is actually installed on the system
-  Write-Verbose ("Checking if package is installed ...")
-  Write-Host (" --- THIS FUNCTION IS NOT FINISHED ---" )
+  Write-Verbose ($lpx+"Checking if package [${Name}] is installed ...")
+  $packages = Get-TranquilPackage -Name $Name
+  if ( $packages ) {
+    Write-Verbose ($lpx +"Found installed package. Will start uninstall ...")
+    Write-Host ("This will uninstall the following packages:")
+    $packages | out-host
+    if ( $Force ) { $Yn = 'y'}
+    While ($Yn -notmatch "^y$|^n$") {
+      $Yn = Read-Host ("Do you want to continue? (Y/n)")
+      if ($Yn -match "^$" ) {
+        $Yn = "Y"
+      }
+      $Yn = $Yn.ToLower()
+    }
+    if ($Yn.ToLower() -match "^n$") {
+      Break
+    }
+    
+    # First run through files and remove those.
+    # We'll create a list of directories and run through those at the end
+    $allDirectories = @()
+    
+    $packages | Foreach-Object {
+      $_thispackage = $_
+      # Get the cached info about the package.
+      # Note: Get-TranquilCache returns a hashtable
+      $_thiscache = Get-TranquilCache -PackageName $_thispackage.name
+      # Run through the items in the cache until they are deleted or signed out
+      $_thiscache.Keys | Foreach-Object {
+        $_mykey = $_
+        # We will run some test. Only if all tests pass will we set $deleteok to $True and we are allowed to delete the item
+        $deleteisok = $False
+        if (($_mykey).toLower() -NotLike ($privvars['METAKEY']).ToLower()) {
+          Write-Verbose ($lpx+"Working on " + ($_thiscache[$_mykey].item))
+          # Don't actually do anything if the item is a protected item
+          if (Test-TranquilProtectedItem -Item ($_thiscache[$_mykey].item)) {
+            Write-Verbose ($lpx+($_thiscache[$_mykey].item) + " is protected. Will not uninstall or modify")
+            $deleteisok = $False
+            Write-Verbose ("Item is a protected directory or file. Will not delete: [" + "--" + "]")
+          } else {
+            # Hash is empty if item is a directory ( or maybe the hash is missing for some reason...)
+            if ( $_thiscache[$_mykey].hash ) {
+              if ( Test-TranquilHash -Item ($_thiscache[$_mykey].item) -Hash $_thiscache[$_mykey].hash ) {
+                # File is confirmed to have same hash as installed chached version
+                $deleteisok = $True
+              } else {
+                Write-Warning ($lpx+($_thiscache[$_mykey].item)+" has been modified.")
+                if ($ForceModified) { 
+                  $Yn = 'Y'
+                  Write-Warning ($lpx+"ForceModified switch detected! Removing item ...")
+                  $deleteisok = $True
+                }
+                $Yn = "ZEBRA"
+                While ($Yn -notmatch "^y$|^Y$|^n$|^N$") {
+                  $Yn = Read-Host ("Would you like to remove item? (Y/n)")
+                  if ($Yn -match "^$" ) {
+                    $Yn = "Y"
+                  }
+                }
+              }
+              if ( $Yn -match "^y$" ) {
+                $deleteisok = $True
+              } else {
+                $deleteisok = $False
+              }
+            } else {
+              # This item is not in the cache. Do not delete
+              Write-Verbose ("Item is not in cache. Will not delete: [" + "--" + "]")
+              $deleteisok = $False
+            }
+            $_Item = Get-Item -ErrorAction SilentlyContinue ($_thiscache[$_mykey].item)
+            if ($_Item) {
+              if ( ($_item.PSIsContainer) ) { 
+                # This is a directory 
+                $allDirectories += $_item
+              } else {
+                if ( $deleteisok ) {
+                  Write-Verbose ($lpx+"Checks complete. Will uninstall item: " + ($_thiscache[$_mykey].item))
+                  # This is a file. Let's remove it
+                  Write-Verbose ($lpx+"Removing: " + $_Item.FullName)
+                  if ( Test-Path $_Item.FullName ) {
+                    if ($WhatIf) {
+                      Write-Host -ForegroundColor Cyan ("[WhatIf] Would delete item [" + $_Item.FullName + "]")
+                    } else {
+                      if ($deleteisok) {
+                        Remove-Item -ErrorAction SilentlyContinue ($_Item.FullName)
+                        $deleteisok = $False
+                      } else {
+                        Write-Host -ForegroundColor Blue ("CHECKS FAILED. Create Bug report in GitHub: ["+$_Item.FullName+"]")
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        } 
+      }
+      # Now run through the directories. They should now be empty and none of them should be protected
+      # BUT it could be that we try to delete a parent directory before the child is removed. 
+      # Which is why we will iterate a sorted array by path length
+      # $allDirectories | Sort-Object { $_.Value.Length }
+      $allDirectories | Sort-Object -Descending { $_.FullName.Length } | %{
+        Write-Verbose ($lpx+"Attempting to remove directory: " + ($_.FullName))
+        $_children = Get-ChildItem -ErrorAction SilentlyContinue $_
+        if ( (($_children) | Measure-Object).Count -eq 0 ) {
+          # Directory is empty. Let's delete
+          try {
+            Remove-Item -ErrorAction SilentlyContinue $_ 
+            Write-Verbose ($lpx+"Directory removed: [" + ($_.FullName) +"]")
+          } catch {
+            Write-Warning ("Could not remove directory: " + ($_.FullName))
+          }
+        }
+      } 
+      
+      # Remove Cache
+      $_cachepath = Get-TranquilCache -PackageName $_thispackage.Name -ReturnPath
+      if ( Test-Path ($_cachepath)) {
+        Remove-Item $_cachepath
+      }
+      Write-Host ("Finished removing package " + $_thispackage.Name)
+    }
+  } else {
+    Write-Verbose ($lpx+"Nothing to uninstall")
+    return $False
+  }
+
+  Write-Host ("Done")
+}
+
+ #    [cmdletbinding( DefaultParameterSetName='Name')]
+ #    Param(
+ #        [Parameter(ParameterSetName='Name', Mandatory = $true)] [Parameter( ParameterSetName='ID')] [String] $Name,
+ #        [Parameter( ParameterSetName='ID')] [int] $ID
+ #    )
+
+#
+# Checks the filehash of an item from the package hash and returns true/false
+Function Test-TranquilHash {
+  [CmdletBinding(DefaultParameterSetName='ByHash')]
+  Param (
+    [Parameter(Mandatory=$True, ParameterSetName='ByPackage')][Parameter(Mandatory=$True, ParameterSetName='ByHash')][String]$Item,
+    [Parameter(Mandatory=$True, ParameterSetName='ByPackage')][String]$Package,
+    [Parameter(Mandatory=$True, ParameterSetName='ByHash')][String]$Hash
+  )
+  $retval = $False
+  if ( $Hash ) {
+    if ( Test-Path $Item ) {
+      if ((Get-FileHash $Item).Hash -Like $Hash) {
+        $retval = $True
+      }
+    }
+  } else {
+    if ( $Package ) {
+      Write-Warning ("----> NOT IMPLEMENTED YET <----")
+      $retval = $False
+    }
+  }
+  return $retval
 }
 
 <#
@@ -593,7 +804,7 @@ Function Get-PrivateVariables {
 #
 # This handles registering and de-registering of created items in Cache
 #
-Function Write-Cache {
+Function Write-TranquilCache {
   [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$Item,
@@ -605,8 +816,7 @@ Function Write-Cache {
   #
   # Only update the cache if this is not a protected item
   #
-  if ( ! (Test-ProtectedItem -Item $Item) ) {
-    # write-host -ForegroundColor Blue ("Working on: " + $Item)
+  if ( ! (Test-TranquilProtectedItem -Item $Item) ) {
     $privvars       = Get-PrivateVariables
 
     $itemtype     = 'unused'
@@ -624,7 +834,7 @@ Function Write-Cache {
     }
 
     # Gets existing cache or create new cache
-    $_cache = Get-Cache -PackageName $PackageName
+    $_cache = Get-TranquilCache -PackageName $PackageName
     if ( ! $_cache ) {
       Write-Verbose ("No cache file found for ${PackageName}")
       $_cache = @{}
@@ -654,24 +864,40 @@ Function Write-Cache {
     $cacheFile = ($privvars['CACHE']+"/"+"${PackageName}")
     Write-Verbose ("Updating Cache: " + $cacheFile)
     $_cache | ConvertTo-Json | Out-File -Encoding utf8 -FilePath $cacheFile
-  } else {
-    write-host ("Schnarf ! " + $ITEM)
   }
 }
 
+<#
+ .Synopsis
+  Retrieve the Cache as a Hash where packagename is the key
 
-#
-# Retrieve the Cache as a HASH where filename/directoryname is the key
-#
-Function Get-Cache {
+ .Description
+  Retrieve the Cache as a Hash where packagename is the key
+
+ .Example
+  # Quite easy
+  Get-TranquilCache <PackageName>
+
+ .Parameter PackageName
+  Name of the Package. Can be a part of the package name. Will return all entries that match the search
+
+ .Parameter ReturnPath
+  Will return the actual Path to the package cache
+#>
+Function Get-TranquilCache {
   [cmdletbinding()]
   Param (
-    [Parameter(Mandatory=$True)][String]$PackageName
+    [Parameter(Mandatory=$True)][String]$PackageName,
+    [Switch]$ReturnPath
   )
 
   $privvars       = Get-PrivateVariables
   $cachedir       = $privvars['CACHE']
   $cacheFile      = ($privvars['CACHE']+"/"+"${PackageName}")
+  if ( $ReturnPath ) {
+    return $cacheFile
+    Break
+  }
 
   $cacheFile = Get-Item -ErrorAction SilentlyContinue ($privvars['CACHE']+"/"+"${PackageName}")
   $returnData = @{}
@@ -692,12 +918,12 @@ Function Get-ProtectedItems {
   $protec = @(
     '^[/\\]*program files[/\\]*$'
     '^[/\\]*program files (x86)^[/\\]*$'
-    '^[/\\]*programdata^[/\\]*$'
-    '^[/\\]*windows^[/\\]*$'
-    '^[/\\]*users^[/\\]*$'
-    '^[/\\]*system32^[/\\]*$'
-    '^[/\\]*temp^[/\\]*$'
-    '^c:[/\\]*$'
+    '^[/\\]*programdata[/\\]*$'
+    '^[/\\]*windows[/\\]*$'
+    '^[/\\]*users[/\\]*$'
+    '^[/\\]*system32[/\\]*$'
+    '^[/\\]*temp[/\\]*$'
+    '^[a-z]:[/\\]*$'
     '^[/\\]+$'
   )
   Return $protec
@@ -707,7 +933,7 @@ Function Get-ProtectedItems {
 # Returns true if string is part of Protected Folders
 # Returns false if not
 #
-Function Test-ProtectedItem {
+Function Test-TranquilProtectedItem {
   [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$Item
@@ -715,12 +941,12 @@ Function Test-ProtectedItem {
 
   $val = $False
   Get-ProtectedItems | % {
-    if ( $Item -match $_ )  {
-      Write-Verbose ("Found protected folder. Will not track in cache: " + $Item)
+    $_checkitem = $_.ToLower()
+    if ( (($Item).ToLower()) -Match $_checkitem )  {
+      Write-Verbose ("Found protected item: " + $Item)
       $val = $True
     }
   }
-  
   Return $val
 }
 
