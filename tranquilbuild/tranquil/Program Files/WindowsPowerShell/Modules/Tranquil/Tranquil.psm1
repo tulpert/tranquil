@@ -28,6 +28,7 @@ Function Update-Tranquil {
   )
 
   $privvars       = Get-PrivateVariables
+  $lpx = "[Update] "
 
   if ( $SourceDirectory ) {
     $Sources = @($SourceDirectory, $privvars['SOURCEDIRS'])
@@ -48,12 +49,12 @@ Function Update-Tranquil {
     $_source = Get-Item -ErrorAction SilentlyContinue $_
     if ( Test-Path "${_source}" ) {
       # Directory exists. Now let's get all .list files in this directory
-      Write-Verbose ("Checking sources dir for .list files: " + ($_source))
+      Write-Verbose ($lpx+"Checking sources dir for .list files: " + ($_source))
       $_listFiles = Get-ChildItem -Path $_ | Where-Object -Property Extension -Match "^.list$"
       $_listFiles | Foreach-Object {
         # Alright, we have a .list file. Now let's read the contents
         $_fileFullName = $_.FullName
-        Write-Verbose ("Syncing .list file: " + $_fileFullName)
+        Write-Verbose ($lpx+"Syncing .list file: " + $_fileFullName)
         $_thislist = Get-Content -ErrorAction SilentlyContinue $_.FullName
         # We extracted have the contents of the .list file. Get the contents as an array
         # The file might contain multiple lines. Let's iterate!
@@ -69,15 +70,15 @@ Function Update-Tranquil {
               Write-Warning ("Ignoring line " + [String]$_linenumber + " in file: " + $_fileFullName)
             } else {
               # Alright. Let's load the repo into local cache 
-              $tmp = Sync-TranquilRemoteRepository -Url $linesplit[1] -Version $linesplit[2]
+              $tmp = Sync-TranquilRemoteRepository -Url $linesplit[1] -Version $linesplit[2] -Component $linesplit[3]
             }
           }
         }
       }
-      Write-Host ( "Directory found. Loading .list files [${_source}]" )
+      # Write-Host ( "Directory found. Loading .list files [${_source}]" )
     }
   } 
-  Write-Host ("THIS FUNCTION IS NOT FINISHED!")
+  Write-Host -ForegroundColor RED ($lpx+"THIS FUNCTION IS NOT FINISHED!")
 }
 
 #
@@ -93,11 +94,54 @@ Function Sync-TranquilRemoteRepository {
   [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$Url,
-    [Parameter(Mandatory=$True)][String]$Version
+    [Parameter(Mandatory=$True)][String]$Version,
+    [Parameter(Mandatory=$True)][String]$Component
   )
-  Write-Host -ForegroundColor Blue $Url
 
-  Write-Host ("THIS FUNCTION IS NOT FINISHED!")
+  $lpx = '[SyncRepo] '
+  $privvars       = Get-PrivateVariables
+  # Check that the lists directory exists. If not - create it!
+  $ListsDir  =  $privvars['LISTSDIR']
+  if ( ! (Test-Path $ListsDir )) {
+    Write-Verbose ($lpx + "No Lists directory found. Creating:" + $ListsDir)
+    New-Item -ItemType Directory $ListsDir
+  }
+  $ListsTmp =  $ListsDir+'/spool'
+  if ( ! (Test-Path $ListsTmp )) {
+    New-Item -ItemType Directory $ListsTmp
+  }
+
+  # If we have GPG installed, fetch and verify the Release.gpg file 
+  # If this fails, then we cannot trust this repository
+  Write-Verbose ($lpx + "GPG Checking is not implemented yet!!!")
+
+  # Create a list of everything to sync based on the provided data
+  $FullUrl = ($Url.Trim() -Replace "[\/]*$", '') + '/dists/' + $Version
+  $_myUri = [System.Uri]$FullUrl
+  $DestFileName = [String]($_myUri.Host).ToLower()
+  $DestFileName = $DestFileName + ( [String]($_myUri.AbsolutePath).ToLower() -Replace '/', '_')
+
+  # Start syncing
+  Write-Host ("Syncing with " + $FullUrl  + " ...")
+  # Now fetch the InRelease file 
+  $Target = 'InRelease'
+  $Src    = ($FullUrl.Trim() -Replace "[\/]*$", '' ) + '/' + $Target
+  $Dst    = ($ListsTmp + '/' + $DestFileName + '_' + $Target)
+  Try {
+    $WebRequestResult = Invoke-WebRequest -ErrorAction SilentlyContinue -Uri $Src -OutFile $Dst
+  } Catch {
+    Write-Warning ($lpx + "Bad repository found. Cannot sync with " + $FullUrl)
+    Break
+  }
+  # Check that the file was successfully downloaded
+  if ( Test-Path $Dst ) {
+    Move-Item -Force $Dst $ListsDir
+  }
+# write-host -ForegroundColor Cyan $WebRequestResult
+
+  # Write-Host -ForegroundColor Blue ($lpx + $Url)
+
+  Write-Host -ForegroundColor RED ($lpx+"THIS FUNCTION IS NOT FINISHED!")
 }  
 
 
@@ -113,7 +157,7 @@ Function Test-TranquilListString {
   $_mysplit = $ListString.Trim() -Split "\s+"
 
   # The tests:
-  $EnoughVars = 3
+  $EnoughVars = 4
   # Test 1: Do we have atleast 3 items in the string
   if ($_mysplit.count -lt $EnoughVars) {
     Write-Warning ("List file does not contain enough parameters. Wanted " + [String]$EnoughVars + " but found " + [String]($_mysplit.count)  + ".")
@@ -138,6 +182,13 @@ Function Test-TranquilListString {
   # Test 4: Check that the version is valid
   if ($_mysplit[2] -NotMatch "${TestCriteria}") {
     Write-Warning ("Version could not be determined. Must meet criteria: " + ${TestCriteria} + ". Found: " + [String]$_mysplit[2]) 
+    return $False
+  }
+  
+  $TestCriteria = '^[a-z0-9-_]+$'
+  # Test 5: Check that the component is valid
+  if ($_mysplit[2] -NotMatch "${TestCriteria}") {
+    Write-Warning ("Component could not be determined. Must meet criteria: " + ${TestCriteria} + ". Found: " + [String]$_mysplit[3]) 
     return $False
   }
   
@@ -492,7 +543,7 @@ Function Uninstall-TranquilPackage {
     [Switch]$ForceModified
   )
   # LogPrefix
-  $lpx="[Uninstall] "
+  $lpx = "[Uninstall] "
 
   $privvars       = Get-PrivateVariables
 
@@ -868,7 +919,7 @@ Function Export-TranquilBuildControl {
   # }
 }
 
-# This returns a Hash of global variables in this module
+# This returns a Hash of global private variables in this module
 Function Get-PrivateVariables {
   # Check if the tmp variable exists
   if ( Test-Path '/windows/temp' ) {
@@ -889,6 +940,7 @@ Function Get-PrivateVariables {
     "RUNID"           = Get-Random(99999999)
     "TMPDIR"          = $_TD
     "CACHE"           = "${ProgramData}/cache"
+    "LISTSDIR"        = "${ProgramData}/lists"
     "STATEFILE"       = "${ProgramData}/statefile"
     "SOURCESDIR"      = "${ProgramData}/sources"
     "METAKEY"         = "__tranquilmeta__"
