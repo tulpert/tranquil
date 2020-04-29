@@ -37,16 +37,112 @@ Function Update-Tranquil {
   
   # Iterate through all Sources Directories and look for .list files
   # Then use those to update the local cache
+  # The list file needs to contain atleast 3 columns. Spaces are (currently) not allowed
+  # 1: 'tranquil'   - The word. Future use is to be determined
+  # 2: url          - The base url to the location. Currently only supporting http/https urls. file support possibly in the future
+  # 3: release      - Usually the codename for the release (or windows version) i.e. "win2016" or similar
+
+  # $Sources now contains a list of possible .list directories
   $Sources | Foreach-Object {
-    $_source = $_
-    if ( Test-Path $_source ) {
+    # Check that the directory actually exists
+    $_source = Get-Item -ErrorAction SilentlyContinue $_
+    if ( Test-Path "${_source}" ) {
+      # Directory exists. Now let's get all .list files in this directory
+      Write-Verbose ("Checking sources dir for .list files: " + ($_source))
+      $_listFiles = Get-ChildItem -Path $_ | Where-Object -Property Extension -Match "^.list$"
+      $_listFiles | Foreach-Object {
+        # Alright, we have a .list file. Now let's read the contents
+        $_fileFullName = $_.FullName
+        Write-Verbose ("Syncing .list file: " + $_fileFullName)
+        $_thislist = Get-Content -ErrorAction SilentlyContinue $_.FullName
+        # We extracted have the contents of the .list file. Get the contents as an array
+        # The file might contain multiple lines. Let's iterate!
+        $_linenumber = 0
+        $_thislist -Split "\n" | Foreach-Object {
+          $_thisline = $_
+          # We are now on a line in the .list file
+          $_linenumber = $_linenumber + 1
+          if ( $_thisline -notmatch "^\s*\#") {
+            # This line does not start with a comment. Let's split the line and check the output
+            $linesplit = Test-TranquilListString -ListString $_thisline
+            if ( ! $linesplit) {
+              Write-Warning ("Ignoring line " + [String]$_linenumber + " in file: " + $_fileFullName)
+            } else {
+              # Alright. Let's load the repo into local cache 
+              $tmp = Sync-TranquilRemoteRepository -Url $linesplit[1] -Version $linesplit[2]
+            }
+          }
+        }
+      }
       Write-Host ( "Directory found. Loading .list files [${_source}]" )
     }
   } 
-  $Sources
-  Write-Host ("THIS FUNCITON IS NOT FINISHED")
+  Write-Host ("THIS FUNCTION IS NOT FINISHED!")
 }
 
+#
+# Will sync up a remote repository to local cache
+#
+# Files and Directories to look for:
+# /dists/<version>/Release          - This will contain all package info, hashes and signed keys
+# /dists/<version>/Release.gpg      - This will contain all package info, hashes and signed keys - but as a signed package. 
+#                                     This is preferable but will only work if pgp or open gpg is available: https://www.gpg4win.org/
+# /dists/<version>/by-hash/SHA256/  - This folder should contain same files as two levels down, only saved as filename SHA256 for added security
+# 
+Function Sync-TranquilRemoteRepository {
+  [cmdletbinding()]
+  Param (
+    [Parameter(Mandatory=$True)][String]$Url,
+    [Parameter(Mandatory=$True)][String]$Version
+  )
+  Write-Host -ForegroundColor Blue $Url
+
+  Write-Host ("THIS FUNCTION IS NOT FINISHED!")
+}  
+
+
+# Takes a string as input and verifies that it is valid .list formatted contents
+# and returns a list or $False if it is malformed
+Function Test-TranquilListString {
+  [cmdletbinding()]
+  Param (
+    [Parameter(Mandatory=$True)][String]$ListString
+  )
+  
+  # Split the string (Does not take into account that a string might contain escaped spaces)
+  $_mysplit = $ListString.Trim() -Split "\s+"
+
+  # The tests:
+  $EnoughVars = 3
+  # Test 1: Do we have atleast 3 items in the string
+  if ($_mysplit.count -lt $EnoughVars) {
+    Write-Warning ("List file does not contain enough parameters. Wanted " + [String]$EnoughVars + " but found " + [String]($_mysplit.count)  + ".")
+    return $False
+  }
+
+  # Test 2: Check if the first word is approved
+  $TestCriteria = 'tranquil'
+  if ($_mysplit[0] -NotMatch "${TestCriteria}") {
+    Write-Warning ("Trigger word not found. Must meet criteria: " + ${TestCriteria} + ". Found: " + [String]$_mysplit[0]) 
+    return $False
+  }
+
+  $TestCriteria = '^http[s]{0,1}\:\/\/[a-z0-9]+'
+  # Test 3: Check if the url is valid
+  if ($_mysplit[1] -NotMatch "${TestCriteria}") {
+    Write-Warning ("URL is not valid. Must meet criteria: " + ${TestCriteria} + ". Found: " + [String]$_mysplit[1]) 
+    return $False
+  }
+
+  $TestCriteria = '^[a-z0-9-_]+$'
+  # Test 4: Check that the version is valid
+  if ($_mysplit[2] -NotMatch "${TestCriteria}") {
+    Write-Warning ("Version could not be determined. Must meet criteria: " + ${TestCriteria} + ". Found: " + [String]$_mysplit[2]) 
+    return $False
+  }
+  
+  return $_mysplit
+}
 
 <#
  .Synopsis
