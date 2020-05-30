@@ -914,9 +914,6 @@ Function Export-TranquilBuildControl {
 
   # if ($controlHash.count -gt 0) {
   Return $controlHash
-  # } else {
-  #   Return $False
-  # }
 }
 
 # This returns a Hash of global private variables in this module
