@@ -11,7 +11,7 @@
   # Proper example to create a Windows 2016 repo server in an apache web directory on a Linux server
   Build-TranquilServer -Directory /var/www/html/tranquil/windows -Version win2016
   
- .Parameter Directory
+ .Parameter BaseDirectory
   Path to the root directory that should contain packages and metadata for the repository. Normally the real life directory of the path referenced in your .list file
 
  .Parameter Version
@@ -29,7 +29,7 @@
 Function Build-TranquilServer {
   [cmdletbinding()]
   Param (
-    [Parameter(Mandatory=$True)][String]$Directory,
+    [Parameter(Mandatory=$True)][String]$BaseDirectory,
     [Parameter(Mandatory=$True)][String]$Version,
     [String]$Description,
     [Switch]$WhatIf
@@ -44,7 +44,7 @@ Function Build-TranquilServer {
   }
 
   # First ensure that all directories exist 
-  $BaseDir  = $Directory -Replace "[\/]*$", ''
+  $BaseDir  = $BaseDirectory -Replace "[\/]*$", ''
   $DistsDir = $BaseDir + '/dists/' + $version
   $PoolDir  = $BaseDir + '/pool/'
   $_dirs     = @( $DistsDir, $PoolDir )
@@ -98,11 +98,14 @@ Function Build-TranquilServer {
   it will do so.
 
  .Example
-  Add-TranquilServerPackage -Package /path/to/package
+  Add-TranquilServerPackage -Package /path/to/package -BaseDirectory /path/to/server/files
   
  .Parameter Package
   Path to the package to add. The package will be read and imported into the correct Tranquil server directory path
   based on the metedata contained within the package (i.e. what the "TRANQUIL/control" file instructs. 
+
+ .Parameter BaseDirectory
+  The directory where the Tranquil server packages are stored
 
  .Parameter NumVersions
   How many version of the same package should we keep. Default is q (i.e. latest).
@@ -120,24 +123,35 @@ Function Add-TranquilServerPackage {
   [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$Package,
+    [Parameter(Mandatory=$True)][String]$BaseDirectory,
     [String]$NumVersions = 1,
     [String]$Description,
     [Switch]$WhatIf
   )
 
-  # Check that the package actually exists and that is is a valid Tranquil package before continuing
-  $CheckPackage = Get-TranquilPackageInfo -File $Package
-  if ( -Not ($CheckPackage)) {
-    Write-Error ("File is not a valid Tranquil package ...")
+  # Check that the basedirectory actually exists
+  if ( -Not (Test-Path $BaseDirectory) ) {
+    Write-Error ("BaseDirectory does not exist ...")
+    exit (668)
   }
+
+  # Check that the package actually exists and that is is a valid Tranquil package before continuing
+  $CheckPackage = Update-TranquilServerPackageInfo -File $Package -BaseDirectory $BaseDirectory
+  if ( -Not ($CheckPackage)) {
+    Write-Error ("File is not a valid Tranquil package: Does not exist ...")
+    exit (669)
+  }
+
 
 }
 
 # Will check if the file is a proper Tranquil Package and return... something...
-Function Get-TranquilPackageInfo {
+# Function Get-TranquilPackageInfo {
+Function Update-TranquilServerPackageInfo {
   Param (
     [Parameter(Mandatory=$True)][String]$File,
-    [String]$TmpDir = '/'
+    [Parameter(Mandatory=$True)][String]$BaseDirectory,
+    [Switch]$Delete = $False
   )
 
   $privvars       = Get-PrivateVariables
@@ -160,15 +174,37 @@ Function Get-TranquilPackageInfo {
   write-host -ForegroundColor blue ($_dest + '/' + $privvars['TRANQUILBUILD'] + '/control' )
   $_control = ($_dest + '/' + $privvars['TRANQUILBUILD'] + '/control' )
 
+  # Check if Control file exists and returns any content
   Write-Verbose ( $ltx + "Checking content of control file: " + $_control)
-
   $_controlcontent = Get-Content $_control
+  if ( -Not $_controlcontent ) {
+    Write-Error ($ltx + "Package is not a valid Tranquil file.")
+    exit (667)
+  }
   Write-Host -ForegroundColor Blue ($_controlcontent)
+  # Read the package metadata and find distribution packagename and version
+  # to determine where to store the package meta content
+  $FoundSection = $False
+  $_controlcontent | % {
+    Write-Host -ForegroundColor Cyan ("THis: " + $_)
+    if ( $_ -Match "^Section\:" ) {
+      $SectionPath = ($_ -Replace "^Section\:\s*", "").Trim()
+      $FoundSection = $True
+    }
+  }
 
+  if ( $FoundSection ) {
+    $SectionPath = (($BaseDirectory -Replace "[\/]*\s*$", "") + '/' + ($SectionPath))
+  } else {
+    $SectionPath = (($BaseDirectory -Replace "[\/]*\s*$", "")) + '/' + 'main'
+  }
+  Write-Verbose ( $ltx + "Using SectionPath: " + $SectionPath )
+
+  # Cleaning up
   if ( Get-Item -ErrorAction SilentlyContinue $_dest ) {
     Write-Host   -ForegroundColor Blue ("Deletnig : " +  $_dest )
     Write-Verbose ($ltx + "Removing tmp file: " + $_dest)
-#     Remove-Item -Force -Recurse $_dest
+    # Remove-Item -Force -Recurse $_dest
   }
 
   
