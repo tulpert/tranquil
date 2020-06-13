@@ -118,7 +118,6 @@ Function Build-TranquilServer {
  .Parameter Force
   Overwrite the Server package even if the package already exists
 #>
-
 Function Add-TranquilServerPackage {
   [cmdletbinding()]
   Param (
@@ -139,8 +138,9 @@ Function Add-TranquilServerPackage {
   $CheckPackage = Update-TranquilServerPackageInfo -File $Package -BaseDirectory $BaseDirectory
   if ( -Not ($CheckPackage)) {
     Write-Error ("File is not a valid Tranquil package: Does not exist ...")
-    exit (669)
+    Return $False
   }
+
 
 
 }
@@ -165,13 +165,13 @@ Function Update-TranquilServerPackageInfo {
   # Tests completed. Let's continue
   $_rand = Get-Random -Minimum 10000 -Maximum 99999
   $_dest = $TempDir + '/' + $_rand
-  write-host -ForegroundColor Blue $_dest
+  # Write-Host -ForegroundColor Blue $_dest
   New-Item -ErrorAction SilentlyContinue -ItemType Directory $_dest
 
-  Expand-Archive -Force -Verbose:$False -Path $File -DestinationPath $_dest
+  Expand-Archive -Force -Verbose:$False -Path $File -DestinationPath $_dest | Out-Null
 
   # Now check if there is a control file present
-  write-host -ForegroundColor blue ($_dest + '/' + $privvars['TRANQUILBUILD'] + '/control' )
+  # write-host -ForegroundColor Blue ($_dest + '/' + $privvars['TRANQUILBUILD'] + '/control' )
   $_control = ($_dest + '/' + $privvars['TRANQUILBUILD'] + '/control' )
 
   # Check if Control file exists and returns any content
@@ -181,15 +181,28 @@ Function Update-TranquilServerPackageInfo {
     Write-Error ($ltx + "Package is not a valid Tranquil file.")
     exit (667)
   }
-  Write-Host -ForegroundColor Blue ($_controlcontent)
+  # Write-Host -ForegroundColor Blue ($_controlcontent)
   # Read the package metadata and find distribution packagename and version
   # to determine where to store the package meta content
+  # Also check if all relevant metadata exists. We MUST have
+  # * Package name  (package: <packagename>)
+  # * Version       (version: 1.2.3)
+  # 
+  # The rest can be dedused or rely on defaults if not set
+  #
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
   $FoundSection = $False
   $_controlcontent | % {
-    Write-Host -ForegroundColor Cyan ("THis: " + $_)
+    # Write-Host -ForegroundColor Blue ("THis: " + $_)
     if ( $_ -Match "^Section\:" ) {
       $SectionPath = ($_ -Replace "^Section\:\s*", "").Trim()
       $FoundSection = $True
+      Break
     }
   }
 
@@ -200,15 +213,122 @@ Function Update-TranquilServerPackageInfo {
   }
   Write-Verbose ( $ltx + "Using SectionPath: " + $SectionPath )
 
-  # Cleaning up
-  if ( Get-Item -ErrorAction SilentlyContinue $_dest ) {
-    Write-Host   -ForegroundColor Blue ("Deletnig : " +  $_dest )
-    Write-Verbose ($ltx + "Removing tmp file: " + $_dest)
-    # Remove-Item -Force -Recurse $_dest
+  # Reading contents of Package file (if exists).
+  # if not exists, create a new Package file
+  $_packagedest = $TempDir      + '/_Packages_' + $_rand
+  $_ptmpfilegz  = $_packagedest + '/' + 'Packages.gz'
+  $_ptmpfile    = $_packagedest + '/' + 'Packages'
+  $_packagegz   = $SectionPath  + '/' + 'Packages.gz'
+  $_packagefile = $SectionPath  + '/' + 'Packages'
+  Write-Verbose ( $ltx + 'Using PckTmp: ' + $_packagedest )
+  Write-Verbose ( $ltx + 'Working on Packages.gz: ' + $_packagegz)
+
+  # Create a new section if it does not exist
+  if ( ! ( Test-Path $SectionPath )) {
+    try {
+      New-Item -ItemType Directory $SectionPath
+    } catch {
+      Write-Error ("Could not create directory. Error 1515")
+    }
   }
 
+  # Create a new temp directory for the Package file
+  if ( ! ( Test-Path $_packagedest )) {
+    try {
+      New-Item -ItemType Directory $_packagedest
+    } catch {
+      Write-Error ("Could not create directory. Error 1516")
+    }
+  }
+
+  $_myCheck = Get-Item -ErrorAction SilentlyContinue $_packagegz
+  # if ( (Test-Path $_packagegz) ) {
+  if ( ($_myCheck.Exists) -And ( -Not $_myCheck.IsPsContainer) ) {
+    Expand-Archive -ErrorAction SilentlyContinue -DestinationPath $_packagedest $_packagegz | Out-Null
+  } 
+  # Write-Host ("---> " + $_packagedest)
+  # Write-Host ("---> " + $_ptmpfile)
+  $PackageContents = Get-Content -ErrorAction SilentlyContinue $_ptmpfile
+
+  # We will now read the contents of the Package.gz file for the newly added package's Section
+  # If the package does not already exist, add it to Package
+  # If the package already exists, check for changes and add it to the Package
+  # We also want the Package file to be alphabetical by Package, Version
+  # (This is where we check how many versions of the same package we will allow to retain) - Maybe...?
+
+  # We will read continously through the package. Any blank line(s) deliniates the different packages
+  # Add the packages to a HASH so we can sort it and inject it back
+  $NewPackage = $True
+  $NewPackageContents = @{}
+  $PackageContents | % {
+    if ( $NewPackage ) {
+      $NewPackage = $False
+      if ( $thisPackage.count -gt 0 ) {
+        # We have found a package. Store it in our hash using Name+Version as a key
+        $thisKey = (($thisPackage.Package).ToLower().Trim() +'-'+ ($thisPackage.Version).ToLower().Trim())
+        if ( ! ($NewPackageContents.ContainsKey($thisKey)) ) {
+          Write-Verbose ( $ltx + "Adding package ["+$thisKey+"] to repository ...")
+          $NewPackageContents.Add( $thisKey, $thisPackage )
+        } else {
+          Write-Verbose ( $ltx + "Package ["+$thisKey+"] already exists in repository ...")
+        }
+      }
+      $thisPackage = @{}
+    }
+    if ( $_ -Match "^\s*$" ) {
+      $NewPackage = $True
+    } else {
+      if ($_ -NotMatch "^\s*\#" ) {
+        if ( $_ -Match "^[A-Z][a-z]*\:" ) {
+          $mySplit = $_.Split(":")
+          $thisPackage.Add($mySplit[0].ToLower(), $mySplit[1].ToLower())
+        }
+      }
+    }
+  }
+
+  # Now start the output of a package
+  # write-host -ForegroundColor Blue ("This is the NEW contents: " + $NewPackageContents )
+  foreach($itemkey in $NewPackageContents.GetEnumerator() | Sort-Object Name ) {
+    $NewOutput = ""
+    # Write-Host -ForegroundColor Blue ("ItemKey: " + $itemkey.Name)
+    # Write-Host -ForegroundColor Cyan ($NewPackageContents[$item.Name])
+    # Write-Host -ForegroundColor Cyan ("Schnarf")
+    foreach ( $packageitem in $NewPackageContents[$itemkey.Name] ) {
+      # Write-Host -ForegroundColor Cyan ("" + $packageitem)
+      # ($packageitem.Keys | foreach { Write-Host -ForegroundColor Blue "$_ $($packageitem[$_])" }) -join "|"
+($packageitem.Keys | foreach { $NewOutput = $NewOutput + ($_.Trim()+": "+ $($packageitem[$_]).Trim()) + "`n" }) -join "|"
+      $NewOutput = $NewOutput + "`n"
+      # $ReleaseContents | Out-File -Encoding utf8 -FilePath $ReleaseFile
+      $NewOutput | Out-File -Encoding utf8 -FilePath $_ptmpfile
+    }
+  }
+  # Write-Host -ForegroundColor Blue ("NewOutput: `n")
+  # Write-Host -ForegroundColor Blue ($NewOutput)
+  # write-host -ForegroundColor blue ("  ----- || -----  ")
+
+  # Write-Host -ForegroundColor Blue ("_Packagedest: " + $_packagedest)
+  Compress-Archive -DestinationPath $_ptmpfilegz $_ptmpfile | Out-Null
+
+  # Check that the new archive file has been created and move it into its final location
+  $_myCheck = Get-Item -ErrorAction SilentlyContinue $_ptmpfilegz
+  if ( ($_myCheck.Exists) -And ( -Not $_myCheck.IsPsContainer) ) {
+    Move-Item -Force $_ptmpfilegz $_packagegz
+    # Write-Host -ForegroundColor Blue ("New Archive file: " + $_packagegz )
+  }
+
+  # Cleaning up Package file temp directory
+  if ( Get-Item -ErrorAction SilentlyContinue $_packagedest ) {
+    # Write-Host   -ForegroundColor Blue ("Deleting : " +  $_packagedest )
+    Write-Verbose ($ltx + "Removing tmp file: " + $_packagedest)
+  }
+  # Cleaning up main tmp directory
+  if ( Get-Item -ErrorAction SilentlyContinue $_dest ) {
+    # Write-Host   -ForegroundColor Blue ("Deleting : " +  $_dest )
+    Write-Verbose ($ltx + "Removing tmp file: " + $_dest)
+  }
   
-  Write-Host -ForegroundColor Blue "Schnarf"
+  # Write-Host -ForegroundColor Blue "Schnarf"
 }
 
 Function Get-PrivateVariables {
