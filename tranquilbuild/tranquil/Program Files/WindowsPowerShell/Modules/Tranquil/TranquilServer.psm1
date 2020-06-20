@@ -165,11 +165,10 @@ Function Update-TranquilServerPackageInfo {
   # Tests completed. Let's continue
   $_rand = Get-Random -Minimum 10000 -Maximum 99999
   $_dest = $TempDir + '/' + $_rand
-  # Write-Host -ForegroundColor Blue $_dest
   New-Item -ErrorAction SilentlyContinue -ItemType Directory $_dest
 
   Expand-Archive -Force -Verbose:$False -Path $File -DestinationPath $_dest | Out-Null
-write-host -ForegroundColor Blue $_dest
+# write-host -ForegroundColor Blue $_dest
 
   # Now check if there is a control file present
   # write-host -ForegroundColor Blue ($_dest + '/' + $privvars['TRANQUILBUILD'] + '/control' )
@@ -178,7 +177,7 @@ write-host -ForegroundColor Blue $_dest
   # Check if Control file exists and returns any content
   Write-Verbose ( $ltx + "Checking content of control file: " + $_control)
   $_controlcontent = Get-Content $_control
-write-host -ForegroundColor Blue ("This: " + $_controlcontent)
+ # write-host -ForegroundColor Blue ("This: " + $_controlcontent)
   if ( -Not $_controlcontent ) {
     Write-Error ($ltx + "Package is not a valid Tranquil file.")
     exit (667)
@@ -192,19 +191,37 @@ write-host -ForegroundColor Blue ("This: " + $_controlcontent)
   # 
   # The rest can be dedused or rely on defaults if not set
   #
-  # TODO TODO TODO TODO
-  # TODO TODO TODO TODO
-  # TODO TODO TODO TODO
-  # TODO TODO TODO TODO
-  # TODO TODO TODO TODO
-  # TODO TODO TODO TODO
   $FoundSection = $False
+  
+  $NewPackageHash = @{}
   $_controlcontent | % {
-    Write-Host -ForegroundColor Blue ("TH2is: " + $_)
+    # Here we can add tests to verify that only approved content metadata is added. TODO
+          # $thisPackage.Add($mySplit[0].ToLower(), $mySplit[1].ToLower())
+    if (( $_ -NotMatch "^\s*\#" ) -And ( $_ -Match "\:")) {
+      $mySplit = $_.Split(":")
+      # In case the content metadata contains any ';' characters, this split will remove it. 
+      # So we have to put it back
+      $_value = ""
+      $c = 1
+      $m = $mySplit.Count
+      while ($c -lt $m) {
+        $_value += $mySplit[$c]
+        if (  $c -ne ( ${m}-1 )) {
+          $_value += ":"
+        }
+        $c += 1
+      }
+      # Write-Host -ForegroundColor Red $mySplit[0]
+      # Write-Host -ForegroundColor Red $_value
+      # Write-Host -ForegroundColor Red ("----")
+    $NewPackageHash.Add($mySplit[0], $_value)
+# write-Host -ForegroundColor Blue ("   ---> Adding item: " + $mySplit[0] + "::" + $_value)
+    }
+    # $NewPackageMetadata += $_
     if ( $_ -Match "^Section\:" ) {
       $SectionPath = ($_ -Replace "^Section\:\s*", "").Trim()
       $FoundSection = $True
-      Break
+   Write-Host -ForegroundColor Blue ("Found explicit seciotn: " + $SectionPath)
     }
   }
 
@@ -212,11 +229,23 @@ write-host -ForegroundColor Blue ("This: " + $_controlcontent)
     $SectionPath = (($BaseDirectory -Replace "[\/]*\s*$", "") + '/' + ($SectionPath))
   } else {
     $SectionPath = (($BaseDirectory -Replace "[\/]*\s*$", "")) + '/' + 'main'
+    $NewPackageHash.Add("Section", "main")
   }
-  Write-Verbose ( $ltx + "Using SectionPath: " + $SectionPath )
 
-  # Reading contents of Package file (if exists).
-  # if not exists, create a new Package file
+  # Now check if the new Package contains enought metadata to create a key
+  if ( $NewPackageHash.ContainsKey("Package") -And $NewPackageHash.ContainsKey("Version")) {
+    $NewPackageKey = ($NewPackageHash["Package"].Trim()+"-"+$NewPackageHash["Version"].Trim())
+  } else {
+    Write-Warning ( $ltx + "Could not locate new package name or version. Cant add package to repository ...")
+    Return $False
+  }
+
+  # Write-Host -ForegroundColor Blue ("TH2is: " + $NewPackageMetadata)
+  Write-Verbose ( $ltx + "Using SectionPath: " + $SectionPath )
+  Write-Verbose ( $ltx + "Importing new package: " + $NewPackageKey )
+
+  # Reading contents of Package.gz file (if exists for this section).
+  # if not exists, create a new Package.gz file
   $_packagedest = $TempDir      + '/_Packages_' + $_rand
   $_ptmpfilegz  = $_packagedest + '/' + 'Packages.gz'
   $_ptmpfile    = $_packagedest + '/' + 'Packages'
@@ -248,11 +277,13 @@ write-host -ForegroundColor Blue ("This: " + $_controlcontent)
   if ( ($_myCheck.Exists) -And ( -Not $_myCheck.IsPsContainer) ) {
     Expand-Archive -ErrorAction SilentlyContinue -DestinationPath $_packagedest $_packagegz | Out-Null
   } 
-  Write-Host ("---> " + $_packagedest)
-  # Write-Host ("---> " + $_ptmpfile)
   $PackageContents = Get-Content -ErrorAction SilentlyContinue $_ptmpfile
+  # Reset the Package file
+  ("# Updated " + (Get-Date -UFormat "%Y-%m%-%d %H:%M:%S")) | Out-File -Encoding utf8 $_ptmpfile
+  ("#")                                                     | Out-File -Append -Encoding utf8 $_ptmpfile
+  ("")                                                      | Out-File -Append -Encoding utf8 $_ptmpfile
 
-Write-Host -ForegroundColor Cyan ("000> " + $PackageContents )
+# Write-Host -ForegroundColor Cyan ("000> " + $PackageContents )
 
   # We will now read the contents of the Package.gz file for the newly added package's Section
   # If the package does not already exist, add it to Package
@@ -264,13 +295,26 @@ Write-Host -ForegroundColor Cyan ("000> " + $PackageContents )
   # Add the packages to a HASH so we can sort it and inject it back
   $NewPackage = $True
   $NewPackageContents = @{}
+  $DoneRegisteredNewPackage = $False
   $PackageContents | % {
+# Write-Host -ForegroundColor Blue ("Packagecontetnline: " + $_)
     if ( $NewPackage ) {
+ # Write-Host -ForegroundColor Blue ("---> This is a new package <----")
       $NewPackage = $False
       if ( $thisPackage.count -gt 0 ) {
         # We have found a package. Store it in our hash using Name+Version as a key
         $thisKey = (($thisPackage.Package).ToLower().Trim() +'-'+ ($thisPackage.Version).ToLower().Trim())
-        if ( ! ($NewPackageContents.ContainsKey($thisKey)) ) {
+# Write-Host -ForegroundColor Blue ("PLANTER: " + $thisKey)
+        # Try to inject the new package metadata in alphabetical order
+        if ( $NewPackageKey -lt $thisKey ) {
+          # write-host -ForegroundColor Blue ("MMMM> " + $thisKey + " - " + $NewPackageKey)
+          # Check if the package is not already registered
+          if ( -Not ($NewPackageContents.ContainsKey($NewPackageKey)) ) {
+            $NewPackageContents.Add( $NewPackageKey, $NewPackageHash )
+            $DoneRegisteredNewPackage = $True
+          }
+        }
+        if ( -Not ($NewPackageContents.ContainsKey($thisKey)) ) {
           Write-Verbose ( $ltx + "Adding package ["+$thisKey+"] to repository ...")
           $NewPackageContents.Add( $thisKey, $thisPackage )
         } else {
@@ -282,44 +326,48 @@ Write-Host -ForegroundColor Cyan ("000> " + $PackageContents )
     if ( $_ -Match "^\s*$" ) {
       $NewPackage = $True
     } else {
+# Write-Host -ForegroundColor Blue ("PKLine: " + $_)
       if ($_ -NotMatch "^\s*\#" ) {
         if ( $_ -Match "^[A-Z][a-z]*\:" ) {
           $mySplit = $_.Split(":")
           $thisPackage.Add($mySplit[0].ToLower(), $mySplit[1].ToLower())
+# Write-Host -ForegroundColor Blue ("   LLLLLL> " + $mySplit[0].ToLower() + "::" + $mySplit[1].ToLower())
         }
       }
     }
   }
 
-Write-Host -ForegroundColor Blue ("IIIIIIIII>>>> " + $thispackage)
+  # If this is the first package in the section, we must treat it specifically
+  if ( -Not $DoneRegisteredNewPackage ) {
+    if ( -Not ($NewPackageContents.ContainsKey($NewPackageKey)) ) {
+      $NewPackageContents.Add( $NewPackageKey, $NewPackageHash )
+    }
+  }
+
 
   # Now start the output of a package
-  write-host -ForegroundColor Blue ("This is the NEW contents: " + $NewPackageContents )
+  # write-host -ForegroundColor Blue ("This is the NEW contents: " + $NewPackageContents )
   foreach($itemkey in $NewPackageContents.GetEnumerator() | Sort-Object Name ) {
     $NewOutput = ""
     # Write-Host -ForegroundColor Blue ("ItemKey: " + $itemkey.Name)
-    # Write-Host -ForegroundColor Cyan ($NewPackageContents[$item.Name])
-    # Write-Host -ForegroundColor Cyan ("Schnarf")
     foreach ( $packageitem in $NewPackageContents[$itemkey.Name] ) {
-      # Write-Host -ForegroundColor Cyan ("" + $packageitem)
-      # ($packageitem.Keys | foreach { Write-Host -ForegroundColor Blue "$_ $($packageitem[$_])" }) -join "|"
-($packageitem.Keys | foreach { $NewOutput = $NewOutput + ($_.Trim()+": "+ $($packageitem[$_]).Trim()) + "`n" }) -join "|"
-      $NewOutput = $NewOutput + "`n"
-      # $ReleaseContents | Out-File -Encoding utf8 -FilePath $ReleaseFile
-      $NewOutput | Out-File -Encoding utf8 -FilePath $_ptmpfile
+      foreach ( $packagekey in $packageitem.keys ) {
+        ($packagekey.Trim() + ": " + $packageitem[$packagekey].Trim()) | Out-File -Append -Encoding utf8 -FilePath $_ptmpfile
+      }
+      # Add a newline to deliniate the packages
+      "`n" | Out-File -Append -Encoding utf8 -FilePath $_ptmpfile 
     }
   }
   # Write-Host -ForegroundColor Blue ("NewOutput: `n")
   # Write-Host -ForegroundColor Blue ($NewOutput)
   # write-host -ForegroundColor blue ("  ----- || -----  ")
 
-  # Write-Host -ForegroundColor Blue ("_Packagedest: " + $_packagedest)
   Compress-Archive -DestinationPath $_ptmpfilegz $_ptmpfile | Out-Null
 
   # Check that the new archive file has been created and move it into its final location
   $_myCheck = Get-Item -ErrorAction SilentlyContinue $_ptmpfilegz
   if ( ($_myCheck.Exists) -And ( -Not $_myCheck.IsPsContainer) ) {
-    Write-Host -ForegroundColor Blue ("Moving from "+ $_ptmpfilegz+" TO " + $_packagegz )
+    # Write-Host -ForegroundColor Blue ("Moving from "+ $_ptmpfilegz+" TO " + $_packagegz )
     Move-Item -Force $_ptmpfilegz $_packagegz
   }
 
