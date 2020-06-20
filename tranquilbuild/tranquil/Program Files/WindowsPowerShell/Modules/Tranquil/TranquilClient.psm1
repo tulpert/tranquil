@@ -12,6 +12,9 @@
  .Parameter SourceDirectory
   Path to the directory containing the .list packages. By default, Tranquil will search in c:/programdata/tranquil/sources or /etc/tranquil/sources
 
+ .Parameter Quiet
+  Prints out Verbose information during run
+
  .Parameter Verbose
   Prints out Verbose information during run
 
@@ -26,6 +29,12 @@ Function Update-Tranquil {
   Param (
     [String]$SourceDirectory
   )
+
+  Write-Warning ($lpx + "GPG Checking is not implemented yet!!!")
+  # if ( -Not ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent() ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+  #   Write-Error ("Update-Tranquil must run in Elevated (i.e. as Administrator)")
+  #   Break
+  # }
 
   $privvars       = Get-PrivateVariables
   $lpx = "[Update] "
@@ -70,7 +79,10 @@ Function Update-Tranquil {
               Write-Warning ("Ignoring line " + [String]$_linenumber + " in file: " + $_fileFullName)
             } else {
               # Alright. Let's load the repo into local cache 
-              $tmp = Sync-TranquilRemoteRepository -Url $linesplit[1] -Version $linesplit[2] -Component $linesplit[3]
+              if ( ! ( Sync-TranquilRemoteRepository -Url $linesplit[1] -Version $linesplit[2] -Component $linesplit[3] )) {
+                Write-Warning ("Failed to sync remote repositories ...")
+                Break
+              }
             }
           }
         }
@@ -78,7 +90,7 @@ Function Update-Tranquil {
       # Write-Host ( "Directory found. Loading .list files [${_source}]" )
     }
   } 
-  Write-Host -ForegroundColor RED ($lpx+"THIS FUNCTION IS NOT FINISHED!")
+  # Write-Host -ForegroundColor RED ($lpx+"THIS FUNCTION IS NOT FINISHED!")
 }
 
 #
@@ -113,7 +125,8 @@ Function Sync-TranquilRemoteRepository {
 
   # If we have GPG installed, fetch and verify the Release.gpg file 
   # If this fails, then we cannot trust this repository
-  Write-Verbose ($lpx + "GPG Checking is not implemented yet!!!")
+  # Write-Warning ($lpx + "GPG Checking is not implemented yet!!!")
+  # TODO TODO GPG Support
 
   # Create a list of everything to sync based on the provided data
   $FullUrl = ($Url.Trim() -Replace "[\/]*$", '') + '/dists/' + $Version
@@ -122,26 +135,34 @@ Function Sync-TranquilRemoteRepository {
   $DestFileName = $DestFileName + ( [String]($_myUri.AbsolutePath).ToLower() -Replace '/', '_')
 
   # Start syncing
-  Write-Host ("Syncing with " + $FullUrl  + " ...")
+  Write-Verbose ("Syncing " + $FullUrl  + " ...")
   # Now fetch the InRelease file 
   $Target = 'InRelease'
   $Src    = ($FullUrl.Trim() -Replace "[\/]*$", '' ) + '/' + $Target
   $Dst    = ($ListsTmp + '/' + $DestFileName + '_' + $Target)
+
+  Write-Host    ("Syncing " + $_BaseName + ": " + $src ) 
   Try {
-    $WebRequestResult = Invoke-WebRequest -ErrorAction SilentlyContinue -Uri $Src -OutFile $Dst
-  } Catch {
-    Write-Warning ($lpx + "Bad repository found. Cannot sync with " + $FullUrl)
-    Break
+    $WebRequestResult = Invoke-WebRequest -UseBasicParsing   -Uri $Src -OutFile $Dst
+    Write-Verbose ("Updating: " + $Dst ) 
+  } Catch [Exception] {
+    Write-Warning ($lpx + "Bad repository found. Cannot sync with " + $FullUrl + ". Error: `n" + ($_ -Replace "`n", " "))
+    if ( $_ -Match "access .* denied") {
+      Write-Host -ForegroundColor Red ($ltx + "[ERROR] Update-Tranquil requires access to update tranquil cache. Access Denied!")
+      Return $False
+    } elseif ( $_ -Match ".*404 Not Found.*" ) {
+      Write-Host -ForegroundColor Red ($ltx + "[ERROR] Tranquil repository not found: " + ($_ -Replace "`n", " "))
+      # This is a non-destructive error. Will continue to scan for new repo's
+      Return $True
+    }
   }
   # Check that the file was successfully downloaded
   if ( Test-Path $Dst ) {
     Move-Item -Force $Dst $ListsDir
   }
-# write-host -ForegroundColor Cyan $WebRequestResult
 
-  # Write-Host -ForegroundColor Blue ($lpx + $Url)
-
-  Write-Host -ForegroundColor RED ($lpx+"THIS FUNCTION IS NOT FINISHED!")
+  # Write-Host -ForegroundColor RED ($lpx+"THIS FUNCTION IS NOT FINISHED - I think!")
+  Return $True
 }  
 
 
@@ -197,6 +218,72 @@ Function Test-TranquilListString {
 
 <#
  .Synopsis
+  Will search external Tranquil repos
+
+ .Description
+  Will return a Tranquil package
+
+ .Example
+  Search-TranquilPackage thispackage
+
+ .Parameter Name
+  The name of the Package
+
+ .Parameter Version
+  The version of the Package
+
+ .Parameter RepoUrl
+  Can be used to overwrite the .list files declaration and use a specific URL
+
+ .Parameter Verbose
+  Will print out debug information
+#>
+Function Search-TranquilPackage_OLD {
+  [cmdletbinding()]
+  Param (
+    [String]$Name,
+    [String]$Version,
+    [String]$RepoUrl,
+    [String]$Section
+  )
+
+  $Packages = @()
+
+  # If $RepoUrl is set, then use that in addition to the other .list files
+  # ...but RepoUrl AND Section must be set, otherwise will ignore
+  if ( $RepoUrl -And $Section ) {
+    $PackageUrls += ($RepoUrl.Trim() -Replace "\/\s*$", "") + "/dists/" + $Section.Trim() + "/InRelease"
+  }
+
+  # Now read the local .list files and import the contents
+  $privvars = Get-PrivateVariables
+  Get-ChildItem $privvars["SOURCESDIR"] | % {
+    $_BaseName = $_.Name
+    if ( $_.Extension -Match "^.list$" ) {
+      Write-Host -ForegroundColor Blue ($_.FullName)
+      Get-Content $_.FullName | Foreach-Object {
+        if ( $_ -NotMatch "^\s*\#" ) {
+          # Get the components of the .list file
+          Write-Host -ForegroundColor Blue ("This: " + $_)
+        }
+      }
+    } else {
+      Write-Warning ("Wrong file extension on file: " + $_BaseName )
+    }
+  }
+
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
+  # TODO TODO TODO TODO
+  Write-Host -ForegroundColor Red "THIS FUNCTION IS ALSO NOT FINISHED YET"
+}
+
+<#
+ .Synopsis
   Will get installed packages, their version and other metadata
 
  .Description
@@ -204,10 +291,13 @@ Function Test-TranquilListString {
 
  .Example
   # Quite easy
-  Get-Tranquil 
+  Get-TranquilPackage [packagename]
   
- .Parameter SourceDirectory
-  Path to the directory containing the .list packages. By default, Tranquil will search in c:/programdata/tranquil/sources or /etc/tranquil/sources
+ .Parameter Name
+  Specify a package name or a substring. Can take simple regex as input
+
+ .Version
+  Specify a specific version of the package to search for
 
  .Parameter Verbose
   Prints out Verbose information during run
@@ -215,20 +305,32 @@ Function Test-TranquilListString {
  .Parameter Force
   Forces the install even if errors have been detected or access rights (run as Administrator) are not in place
 
+ .Installed
+  Show only installed packages on the system
+
+ .ListContents
+  Dont remember what this was supposed to do. Might remove it, dunno.
+
  .Parameter WhatIf
   Only prints out what to do, but does not actually do it
 #>
 Function Get-TranquilPackage {
   [cmdletbinding()]
   Param (
-    $Name,
+    [String]$Name,
+    [String]$Version,
     [Switch]$Installed,
     [Switch]$ListContents
   )
 
+  $privvars = Get-PrivateVariables
   Write-Verbose ("Searching if package [${Name}] is installed on local system")
 
   # TODO: Create something to read from external repo's here!
+  # The external repo Packages should be synced and available as InRelease files in the lists directory
+  Get-ChildItem -ErrorAction SilentlyContinue $privvars["LISTSDIR"] *_InRelease | % {
+    Write-Host -ForegroundColor Blue $_
+  }
   $AllPackages = @()
 
   # Get the module's private variables
@@ -242,9 +344,7 @@ Function Get-TranquilPackage {
       # Plan and test for that
 
       # If specific packages have been requested, only return those. Else return everything
-      # if ( ! $Name ) {
       $AddContents = $False
-      # }
       $CacheDirItems | Foreach-Object {
         $_thisitem = $_
         $fileContents = Get-Content $_ | ConvertFrom-Json 
@@ -273,6 +373,7 @@ Function Get-TranquilPackage {
             $_contents | Add-Member -MemberType NoteProperty -Name Version -Value $fileContents.($privvars['METAKEY']).version
             $_contents | Add-Member -MemberType NoteProperty -Name LastUpdatedTime -Value $_.lastupdatedtime
             $_contents | Add-Member -MemberType NoteProperty -Name Type -Value $_.type
+            $_contents | Add-Member -MemberType NoteProperty -Name Status -Value "Installed"
             $AllPackages += $_contents
           }
         }
@@ -285,7 +386,7 @@ Function Get-TranquilPackage {
   }
 
   if ( $AllPackages ) {
-    $AllPackages
+    return $AllPackages
   } else {
     Write-Verbose "No Packages based on search criteria found on this system"
     return $False
@@ -301,10 +402,10 @@ Function Get-TranquilPackage {
 
  .Example
   # Quite easy
-  Install-TranquilPackage <package_file>
+  Install-TranquilPackage <name|path>
   
- .Parameter File
-  Path to the package file. This is the default parameter.
+ .Parameter Package
+  Name of the Package. If parameter is a filepath, install the file
 
  .Parameter ReInstall
   Runs installation on an already installed package. Will overwrite existing installation.
@@ -321,7 +422,7 @@ Function Get-TranquilPackage {
 Function Install-TranquilPackage {
   [cmdletbinding()]
   Param (
-    [Parameter(Mandatory=$True)][String]$File,
+    [Parameter(Mandatory=$True)][String]$Package,
     [String]$Root = "/",
     [Switch]$Force,
     [Switch]$WhatIf,
@@ -340,6 +441,14 @@ Function Install-TranquilPackage {
   $MYRANDOM       = "tranquil_tmp_" + $privvars['RUNID']
   $TMPDIR         = $privvars['TMPDIR'] + "/" + $MYRANDOM
   $TMPFILE        = $TMPDIR + ".tmp.zip"
+
+  # First check if $Package is a file or just a reference to a repository package
+  if ( Get-item $Package ) {
+    # Oh yes, this is a local package that's been downloaded. Update the path
+    $File = $Package
+  } else {
+    # Nope, this file does not exist locally. Search the package synced repo's
+  }
 
   # First check if the file being references for installation actually exists
   $installfile = Get-Item -ErrorAction SilentlyContinue $File
@@ -724,6 +833,9 @@ Function Test-TranquilHash {
  .Parameter BuildDirectory
   Path to the build directory. This is the default parameter.
 
+ .Parameter Force
+  Will overwrite without prompting
+
  .Parameter Verbose
   Prints out Verbose information during run
 
@@ -734,7 +846,8 @@ Function New-TranquilPackage {
   [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$BuildDirectory,
-    [String]$OutFile
+    [String]$OutFile,
+    [Switch]$Force
   )
 
   # Get the module's private variables
@@ -839,9 +952,12 @@ Function New-TranquilPackage {
   # Check if an old package already exists and query user if they want to overwrite
   $checkfile = Get-Item -ErrorAction SilentlyContinue $NewPackageName
   if ( $checkfile.exists ) {
+    if ($Force) {
+      $Yn = "Y"
+    }
     While ($Yn -notmatch "^y$|^Y$|^n$|^N$") {
       $Yn = Read-Host ("Found file [ "+$checkfile.fullname+" ]`nDo you want to overwrite (Y/n)")
-      if ($Yn -match "^$" ) {
+      if ($Yn -match "^$") {
         $Yn = "Y"
       }
     }
@@ -1112,3 +1228,4 @@ Export-ModuleMember -Function Install-TranquilPackage
 Export-ModuleMember -Function UnInstall-TranquilPackage
 Export-ModuleMember -Function Get-TranquilPackage
 Export-ModuleMember -Function Update-Tranquil
+# Export-ModuleMember -Function Search-TranquilPackage

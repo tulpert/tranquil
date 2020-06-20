@@ -169,6 +169,7 @@ Function Update-TranquilServerPackageInfo {
   New-Item -ErrorAction SilentlyContinue -ItemType Directory $_dest
 
   Expand-Archive -Force -Verbose:$False -Path $File -DestinationPath $_dest | Out-Null
+write-host -ForegroundColor Blue $_dest
 
   # Now check if there is a control file present
   # write-host -ForegroundColor Blue ($_dest + '/' + $privvars['TRANQUILBUILD'] + '/control' )
@@ -177,6 +178,7 @@ Function Update-TranquilServerPackageInfo {
   # Check if Control file exists and returns any content
   Write-Verbose ( $ltx + "Checking content of control file: " + $_control)
   $_controlcontent = Get-Content $_control
+write-host -ForegroundColor Blue ("This: " + $_controlcontent)
   if ( -Not $_controlcontent ) {
     Write-Error ($ltx + "Package is not a valid Tranquil file.")
     exit (667)
@@ -198,7 +200,7 @@ Function Update-TranquilServerPackageInfo {
   # TODO TODO TODO TODO
   $FoundSection = $False
   $_controlcontent | % {
-    # Write-Host -ForegroundColor Blue ("THis: " + $_)
+    Write-Host -ForegroundColor Blue ("TH2is: " + $_)
     if ( $_ -Match "^Section\:" ) {
       $SectionPath = ($_ -Replace "^Section\:\s*", "").Trim()
       $FoundSection = $True
@@ -246,9 +248,11 @@ Function Update-TranquilServerPackageInfo {
   if ( ($_myCheck.Exists) -And ( -Not $_myCheck.IsPsContainer) ) {
     Expand-Archive -ErrorAction SilentlyContinue -DestinationPath $_packagedest $_packagegz | Out-Null
   } 
-  # Write-Host ("---> " + $_packagedest)
+  Write-Host ("---> " + $_packagedest)
   # Write-Host ("---> " + $_ptmpfile)
   $PackageContents = Get-Content -ErrorAction SilentlyContinue $_ptmpfile
+
+Write-Host -ForegroundColor Cyan ("000> " + $PackageContents )
 
   # We will now read the contents of the Package.gz file for the newly added package's Section
   # If the package does not already exist, add it to Package
@@ -287,8 +291,10 @@ Function Update-TranquilServerPackageInfo {
     }
   }
 
+Write-Host -ForegroundColor Blue ("IIIIIIIII>>>> " + $thispackage)
+
   # Now start the output of a package
-  # write-host -ForegroundColor Blue ("This is the NEW contents: " + $NewPackageContents )
+  write-host -ForegroundColor Blue ("This is the NEW contents: " + $NewPackageContents )
   foreach($itemkey in $NewPackageContents.GetEnumerator() | Sort-Object Name ) {
     $NewOutput = ""
     # Write-Host -ForegroundColor Blue ("ItemKey: " + $itemkey.Name)
@@ -313,8 +319,8 @@ Function Update-TranquilServerPackageInfo {
   # Check that the new archive file has been created and move it into its final location
   $_myCheck = Get-Item -ErrorAction SilentlyContinue $_ptmpfilegz
   if ( ($_myCheck.Exists) -And ( -Not $_myCheck.IsPsContainer) ) {
+    Write-Host -ForegroundColor Blue ("Moving from "+ $_ptmpfilegz+" TO " + $_packagegz )
     Move-Item -Force $_ptmpfilegz $_packagegz
-    # Write-Host -ForegroundColor Blue ("New Archive file: " + $_packagegz )
   }
 
   # Cleaning up Package file temp directory
