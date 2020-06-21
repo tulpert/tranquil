@@ -1,3 +1,239 @@
+Function W {
+  Param (
+    $MSG,
+    $LTX = "[NONE]"
+  )
+  Write-Host -ForegroundColor Cyan ($LTX + $MSG)
+}
+Function Update-TranquilRelease {
+  [cmdletbinding()]
+  Param (
+    [Parameter(Mandatory=$True)][String]$BaseDirectory,
+    [Parameter(Mandatory=$True)][String]$Section,
+    [Parameter(Mandatory=$True)][String]$Distribution,
+    [Parameter(Mandatory=$True)][String]$PackagesMD5,
+    [Parameter(Mandatory=$True)][String]$PackagesSHA256,
+    [Parameter(Mandatory=$True)][String]$PackagesGzMD5,
+    [Parameter(Mandatory=$True)][String]$PackagesGzSHA256,
+    [Parameter(Mandatory=$True)][String]$PackagesSize,
+    [Parameter(Mandatory=$True)][String]$PackagesGzSize
+  )
+
+  $ltx          = '[UpdateRelease] '
+  $privvars     = Get-PrivateVariables
+  $TempDir      = $privvars['TMPDIR']
+
+  # Create a temporary file to store the InRelease data in
+  $_rand        = Get-Random -Minimum 1000000 -Maximum 9999999
+  $_IRTemp      = $TempDir + '/' + $_rand
+
+  # Find InRelease file based on the Section and BaseDirectory
+  $_IRPath  = ($BaseDirectory.TrimEnd('/') + '/dists/' + $Distribution.TrimEnd('/') + '/' + 'InRelease')
+  $_IRShort = ($_IRPath -Replace $BaseDirectory, "")
+  
+  Write-Verbose ($ltx + "Updating InRelease: " + $_IRShort)
+
+
+  if ( Test-Path $_IRPath ) {
+    # The InRelease file exists, so we can update it
+    # First create a copy for us to manipulate
+    Copy-Item -ErrorAction SilentlyContinue -Path $_IRPath -Destination $_IRTemp | Out-Null
+    Write-Host -ForegroundColor Cyan (" --> Using TMP IR: " + $_IRTemp)
+    $PackagesString   = $Section.TrimEnd('/') + '/' + 'Packages'
+    $PackagesGzString = $PackagesString + '.gz'
+W -ltx $ltx ("---> Working with ---> " + $PackagesString)
+W -ltx $ltx ("---> Working with gx-> " + $PackagesGzString)
+    if ( (Get-Content $_IRPath) -Match " [a-zA-Z0-9]{32}\s+.*${PackagesString}$") {
+      (Get-Content $_IRTemp) -Replace "^ [a-zA-Z0-9]{32}\s+[0-9]+\s+${PackagesString}", (" " + ${PackagesMD5} + (" "*(24-($PackagesSize.Length))) + $PackagesSize + " " + $PackagesString) | Out-File -Encoding utf8 $_IRTemp
+    } else {
+      # Reset the _IRTemp file
+      "" | Out-File -Encoding utf8 $_IRTemp
+      # Now extract all the MD5 sums, sort them and put them back in while injecting the new Packages file
+      # Because I am stubborn I want to sort by filename, but have the hash as the first element
+      # Yes, all the next lines of code could be made easier if I sorted on the first element in the string
+      # So, we extract all into a hash using the filename as a key and sort by that
+      W -ltx $LTX ("Working on : " + $_IRTemp)
+      Get-Content -ErrorAction SilentlyContinue $_IRPath | % {
+        if ( $_ -Match "^[a-zA-Z0-9]+\:" ) {
+          $_ | Out-File -Append -Encoding utf8 $_IRTemp
+        }
+W -ltx $LTX ("===> " + $_)
+        if (( $_ -Match "^MD5Sum\:\s*$" ) -Or ($_ -Match "^SHA256\:\s*$")) {
+          # Now run through the scenarios of: Packages MD5 and SHA256, Packages.gz MD5 and SHA256
+          $q = @("MD5", "MD5gz", "SHA256", "SHA256gz")
+          ForEach ( $i in $q) {
+            W -ltx $LTX ("=== STARTING ===> ${i} ")
+
+
+            if ($i -Match "^MD5") {
+              $starter = "^MD5Sum\:\s*$"
+              $filter  = "^ [a-z0-9]{32} "
+            } elseif ($i -Match "^SHA256") {
+              $starter = "^SHA256\:\s*$"
+              $filter  = "^ [a-z0-9]{64} "
+            }
+
+
+            if ($i -Match ("gz$")) {
+              $PackagesName   = "Packages.gz"
+              $PackagesFile = $PackagesGzString
+              $PSize        = $PackagesGzSize
+              if ($i -Match "^md5") {
+                $PackagesHash = $PackagesGzMD5
+              } else {
+                $PackagesHash = $PackagesGzSHA256
+              }
+            } else {
+              $PackagesName   = "Packages"
+              $PackagesFile   = $PackagesString
+              $PSize          = $PackagesSize
+              if ($i -Match "^md5") {
+                $PackagesHash = $PackagesMD5
+              } else {
+                $PackagesHash = $PackagesSHA256
+              }
+            }
+
+W -ltx $ltx ("Running with PackagesFile: " + $PackagesFile)
+            if ( $_ -Match "${starter}") {
+              # Start adding the Checksum
+              $_ThisHash = @{}
+              # And since we havent seen this package before, we can inject that as the first element
+              if ( -Not $_ThisHash.ContainsKey($PackagesFile)) {
+                $_ThisHash.Add($PackagesFile, " ${PackagesHash}" + (" "*(24-($PSize.Length))) + $PSize + " " + $PackagesFile)
+              }
+              $_ThisHash.Keys | % {
+                $MyKey = ($_ -Replace "\s+", " ").trim().split(" ")[2..999] | Join-String -Separator "_"
+                if ( $MyKey.Length -gt 0) {
+W -ltx $ltx (" ------->>> FOUND Kay: " + $MyKey)
+                  if ( -Not $_ThisHash.ContainsKey($MyKey)) {
+W -ltx $ltx (" ------->>> FOUND STUFF <<-----")
+                    $_ThisHash.Add($MyKey, $_)
+                  }
+                  W -ltx $LTX ("Using Key: " + $MyKey)
+                }              
+              }
+              foreach ( $hashitem in $_ThisHash.Keys | Sort-Object ) {
+                W -ltx $LTX ("Printing Hash line (${i}:${hashitem}): " + $_ThisHash[$hashitem])
+                $_ThisHash[$hashitem] | Out-File -Append -Encoding utf8 $_IRTemp
+              }
+            }
+          }
+        }
+      }
+    }
+
+
+
+        # if ( $_ -Match "^MD5Sum") {
+        #   $_ | Out-File -Append -Encoding utf8 $_IRTemp
+        #   # Start adding the MD5SUMS
+        #   $MD5Hash = @{}
+        #   W -ltx $ltx (" ${PackagesMD5}" + (" "*(24-($PackagesSize.Length))) + $PackagesSize + " " + $PackagesString)
+        #   $MD5Sums    = (Get-Content -ErrorAction SilentlyContinue $_IRPath ) -Match "^ [a-z0-9]{32} " 
+        #   # And since we havent seen this package before, we can inject that as the first element
+        #   $MD5Hash.Add($PackagesString, " ${PackagesMD5}" + (" "*(24-($PackagesSize.Length))) + $PackagesSize + " " + $PackagesString)
+        #   $MD5Sums | % {
+        #       $MyKey = ($_ -Replace "\s+", " ").trim().split(" ")[2..999] | Join-String -Separator "_"
+        #       $MD5Hash.Add($MyKey, $_)
+        #       W -ltx $LTX ("Using Key: " + $MyKey)
+        #   }
+        #   foreach ( $hashitem in $MD5Hash.Keys | Sort-Object ) {
+        #     W -ltx $LTX ("Printing MD5 line: " + $MD5Hash[$hashitem])
+        #     $MD5Hash[$hashitem] | Out-File -Append -Encoding utf8 $_IRTemp
+        #   }
+        # }
+        # # Now repeat for SHA256 for good measure
+        # $SHA256Sums = (Get-Content -ErrorAction SilentlyContinue $_IRPath ) -Match "^ [a-z0-9]{64} " 
+        # if ( $_ -Match "^SHA256") {
+        #   $_ | Out-File -Append -Encoding utf8 $_IRTemp
+        #   # Start adding the SHA256
+        #   $SHA256Hash = @{}
+        #   W -ltx $ltx (" ${PackagesSHA256}" + (" "*(24-($PackagesSize.Length))) + $PackagesSize + " " + $PackagesString)
+        #   $SHA256Sums    = (Get-Content -ErrorAction SilentlyContinue $_IRPath ) -Match "^ [a-z0-9]{64} " 
+        #   # And since we havent seen this package before, we can inject that as the first element
+        #   $SHA256Hash.Add($PackagesString, " ${PackagesSHA256}" + (" "*(24-($PackagesSize.Length))) + $PackagesSize + " " + $PackagesString)
+        #   $SHA256Sums | % {
+        #       $MyKey = ($_ -Replace "\s+", " ").trim().split(" ")[2..999] | Join-String -Separator "_"
+        #       $SHA256Hash.Add($MyKey, $_)
+        #       W -ltx $LTX ("Using Key: " + $MyKey)
+        #   }
+    
+        #   foreach ( $hashitem in $SHA256Hash.Keys | Sort-Object ) {
+        #     W -ltx $LTX ("Printing SHA256 line: " + $SHA256Hash[$hashitem])
+        #     $SHA256Hash[$hashitem] | Out-File -Append -Encoding utf8 $_IRTemp
+        #   }
+        # }
+    # # Rinse and repeat for the .gz files. I should probably make this into a repeatable function, but not tonight
+    # if ( (Get-Content $_IRPath) -Match " [a-zA-Z0-9]{32}\s+.*${PackagesGzString}$") {
+    #   (Get-Content $_IRTemp) -Replace "^ [a-zA-Z0-9]{32}\s+[0-9]+\s+${PackagesGzString}", (" " + ${PackagesGzMD5} + (" "*(24-($PackageGzSize.Length))) + $PackageGzSize + " " + $PackagesGzString) | Out-File -Encoding utf8 $_IRTemp
+    # } else {
+    #   # Now extract all the MD5 sums, sort them and put them back in while injecting the new Packages file
+    #   # Because I am stubborn I want to sort by filename, but have the hash as the first element
+    #   # Yes, all the next lines of code could be made easier if I sorted on the first element in the string
+    #   # So, we extract all into a hash using the filename as a key and sort by that
+    #   W -ltx $LTX ("Working on : " + $_IRTemp)
+    #   Get-Content -ErrorAction SilentlyContinue $_IRPath | % {
+    #     if ( $_ -Match "^[a-zA-Z]+\:" ) {
+    #       $_ | Out-File -Append -Encoding utf8 $_IRTemp
+    #     }
+    #     if ( $_ -Match "^MD5Sum") {
+    #       $_ | Out-File -Append -Encoding utf8 $_IRTemp
+    #       # Start adding the MD5SUMS
+    #       $MD5Hash = @{}
+    #       W -ltx $ltx (" ${PackagesGzMD5}" + (" "*(24-($PackageGzSize.Length))) + $PackageGzSize + " " + $PackagesGzString)
+    #       $MD5Sums    = (Get-Content -ErrorAction SilentlyContinue $_IRPath ) -Match "^ [a-z0-9]{32} " 
+    #       # And since we havent seen this package before, we can inject that as the first element
+    #       $MD5Hash.Add($PackagesGzString, " ${PackagesGzMD5}" + (" "*(24-($PackageGzSize.Length))) + $PackageGzSize + " " + $PackagesGzString)
+    #       $MD5Sums | % {
+    #           $MyKey = ($_ -Replace "\s+", " ").trim().split(" ")[2..999] | Join-String -Separator "_"
+    #           $MD5Hash.Add($MyKey, $_)
+    #           W -ltx $LTX ("Using Key: " + $MyKey)
+    #       }
+    #       foreach ( $hashitem in $MD5Hash.Keys | Sort-Object ) {
+    #         W -ltx $LTX ("Printing MD5 line: " + $MD5Hash[$hashitem])
+    #         $MD5Hash[$hashitem] | Out-File -Append -Encoding utf8 $_IRTemp
+    #       }
+    #     }
+    #     # Now repeat for SHA256 for good measure
+    #     $SHA256Sums = (Get-Content -ErrorAction SilentlyContinue $_IRPath ) -Match "^ [a-z0-9]{64} " 
+    #     if ( $_ -Match "^SHA256") {
+    #       $_ | Out-File -Append -Encoding utf8 $_IRTemp
+    #       # Start adding the SHA256
+    #       $SHA256Hash = @{}
+    #       W -ltx $ltx (" ${PackagesGzSize}" + (" "*(24-($PackageGzSize.Length))) + $PackageGzSize + " " + $PackagesGzString)
+    #       $SHA256Sums    = (Get-Content -ErrorAction SilentlyContinue $_IRPath ) -Match "^ [a-z0-9]{64} " 
+    #       # And since we havent seen this package before, we can inject that as the first element
+    #       $SHA256Hash.Add($PackagesGzString, " ${PackagesGzSize}" + (" "*(24-($PackageGzSize.Length))) + $PackageGzSize + " " + $PackagesGzString)
+    #       $SHA256Sums | % {
+    #           $MyKey = ($_ -Replace "\s+", " ").trim().split(" ")[2..999] | Join-String -Separator "_"
+    #           $SHA256Hash.Add($MyKey, $_)
+    #           W -ltx $LTX ("Using Key: " + $MyKey)
+    #       }
+    # 
+    #       foreach ( $hashitem in $SHA256Hash.Keys | Sort-Object ) {
+    #         W -ltx $LTX ("Printing SHA256 line: " + $SHA256Hash[$hashitem])
+    #         $SHA256Hash[$hashitem] | Out-File -Append -Encoding utf8 $_IRTemp
+    #       }
+    #     }
+    #   }
+    # }
+    if ( Test-Path $_IRTemp ) {
+      Write-Verbose ("Updating InRelease file: " + $_IRPath )
+      Move-Item -Force $_IRTemp $_IRPath
+    }
+    Write-Host -ForegroundColor Cyan (" --> Looking for package file : " + $PackagesGzString)
+    Write-Host -ForegroundColor Cyan (" --> Looking for package file : " + $PackagesGzString)
+  } else {
+    Write-Host -ForegroundColor Red ($ltx + "[ERROR] Detected corrupt repository directory for [${BaseDirectory}] in distribution [${Distribution}]")
+    Write-Host -ForegroundColor Red ($ltx + "[ERROR] Solve the issue or re-build the repository using Build-TranquilServer")
+    Write-Error ("Error 169. Cannot continue")
+    Break
+  }
+  New-Item -ErrorAction SilentlyContinue -ItemType Directory $_dest | Out-Null
+}
+
+
 <#
  .Synopsis
   Will setup and configure a Tranquil repository server
@@ -14,7 +250,7 @@
  .Parameter BaseDirectory
   Path to the root directory that should contain packages and metadata for the repository. Normally the real life directory of the path referenced in your .list file
 
- .Parameter Version
+ .Parameter Distribution
   A string to denote the version, i.e. "win2016", "win2019" or "win2019_core". It could be anything you wish but will be referenced verbatim in users .list file
 
  .Parameter Description
@@ -30,7 +266,7 @@ Function Build-TranquilServer {
   [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$BaseDirectory,
-    [Parameter(Mandatory=$True)][String]$Version,
+    [Parameter(Mandatory=$True)][String]$Distribution,
     [String]$Description,
     [Switch]$WhatIf
   )
@@ -38,14 +274,14 @@ Function Build-TranquilServer {
   $ltx = '[BuildServer] '
 
   # Check the variables that no crazy characters are input
-  if ( $Version -iNotMatch "^[a-z0-9]*$") {
-    Write-Warning ("Version must only contain alphanumeric characters (in lowercase)")
+  if ( $Distribution -iNotMatch "^[a-z0-9]*$") {
+    Write-Warning ("Distribution must only contain alphanumeric characters (in lowercase)")
     return $False
   }
 
   # First ensure that all directories exist 
   $BaseDir  = $BaseDirectory -Replace "[\/]*$", ''
-  $DistsDir = $BaseDir + '/dists/' + $version
+  $DistsDir = $BaseDir + '/dists/' + $Distribution
   $PoolDir  = $BaseDir + '/pool/'
   $_dirs     = @( $DistsDir, $PoolDir )
 
@@ -71,8 +307,8 @@ Function Build-TranquilServer {
     'Label'         = "xXx"
     'Suite'         = "UuU"
     'Version'       = "VvV"
-    'Date'          = (Get-Date)
-    'Codename'      = $version
+    'Date'          = (Get-Date -UFormat "%Y-%m%-%d %T %Z")
+    'Distribution'  = $Distribution
     'Architectures' = "aAa"
     'Components'    = "cCCc"
     'Description'   = $Description
@@ -81,7 +317,13 @@ Function Build-TranquilServer {
     # Only create a new InRelease file if it doesn't already exist
     if ( ! (Test-Path -PathType Leaf $ReleaseFile )) {
       Write-Verbose ($ltx + "Creating initial release file: " + $ReleaseFile)
-      $ReleaseContents | Out-File -Encoding utf8 -FilePath $ReleaseFile
+      "" | Out-File -Append -Encoding utf8 -FilePath $ReleaseFile
+      $ReleaseContents.Keys | % {
+        ($_.Trim() + ": " + $ReleaseContents[$_].Trim() ) | Out-File -Append -Encoding utf8 -FilePath $ReleaseFile
+      }
+      # Add the placeholders for the Checksums
+      "MD5Sum:" | Out-File -Append -Encoding utf8 -FilePath $ReleaseFile
+      "SHA256:" | Out-File -Append -Encoding utf8 -FilePath $ReleaseFile
     }
   }
   Write-Host -ForegroundColor Green (" Releasefile ---> " + $ReleaseFile)
@@ -98,7 +340,7 @@ Function Build-TranquilServer {
   it will do so.
 
  .Example
-  Add-TranquilServerPackage -Package /path/to/package -BaseDirectory /path/to/server/files
+  Add-TranquilServerPackage -Package /path/to/package -BaseDirectory /path/to/server/files -Distribution win2019
   
  .Parameter Package
   Path to the package to add. The package will be read and imported into the correct Tranquil server directory path
@@ -106,6 +348,9 @@ Function Build-TranquilServer {
 
  .Parameter BaseDirectory
   The directory where the Tranquil server packages are stored
+
+ .Parameter Distribution
+  Which distribution is this repo for? i.e. win2019, win2016_core etc. 
 
  .Parameter NumVersions
   How many version of the same package should we keep. Default is q (i.e. latest).
@@ -122,42 +367,32 @@ Function Add-TranquilServerPackage {
   [cmdletbinding()]
   Param (
     [Parameter(Mandatory=$True)][String]$Package,
+    [Parameter(Mandatory=$True)][String]$Distribution,
     [Parameter(Mandatory=$True)][String]$BaseDirectory,
     [String]$NumVersions = 1,
     [String]$Description,
     [Switch]$WhatIf
   )
 
+  $privvars       = Get-PrivateVariables
+  $TempDir        = $privvars['TMPDIR']
+  $lpx            = '[PackageInfo] '
+  
   # Check that the basedirectory actually exists
   if ( -Not (Test-Path $BaseDirectory) ) {
     Write-Error ("BaseDirectory does not exist ...")
     exit (668)
   }
 
-  # Check that the package actually exists and that is is a valid Tranquil package before continuing
-  $CheckPackage = Update-TranquilServerPackageInfo -File $Package -BaseDirectory $BaseDirectory
-  if ( -Not ($CheckPackage)) {
-    Write-Error ("File is not a valid Tranquil package: Does not exist ...")
-    Return $False
+  # Check that the package file actually exists 
+  if ( -Not (Test-Path $Package) ) {
+    Write-Error ("Package does not exist")
+    Break 8124
   }
 
-
-
-}
-
-# Will check if the file is a proper Tranquil Package and return... something...
-# Function Get-TranquilPackageInfo {
-Function Update-TranquilServerPackageInfo {
-  Param (
-    [Parameter(Mandatory=$True)][String]$File,
-    [Parameter(Mandatory=$True)][String]$BaseDirectory,
-    [Switch]$Delete = $False
-  )
-
-  $privvars       = Get-PrivateVariables
-  $TempDir        = $privvars['TMPDIR']
-  $lpx = '[PackageInfo] '
-  
+  $File = $Package
+# write-host -ForegroundColor Cyan ("---> 1 <---")
+# write-host -ForegroundColor Cyan ("---> 2 <---")
   if ( -Not ( Get-ChildItem -ErrorAction SilentlyContinue $File ) ) {  
     return $False
   }
@@ -165,24 +400,24 @@ Function Update-TranquilServerPackageInfo {
   # Tests completed. Let's continue
   $_rand = Get-Random -Minimum 10000 -Maximum 99999
   $_dest = $TempDir + '/' + $_rand
-  New-Item -ErrorAction SilentlyContinue -ItemType Directory $_dest
+  New-Item -ErrorAction SilentlyContinue -ItemType Directory $_dest | Out-Null
 
   Expand-Archive -Force -Verbose:$False -Path $File -DestinationPath $_dest | Out-Null
-# write-host -ForegroundColor Blue $_dest
+# write-host -ForegroundColor Cyan $_dest
 
   # Now check if there is a control file present
-  # write-host -ForegroundColor Blue ($_dest + '/' + $privvars['TRANQUILBUILD'] + '/control' )
+  # write-host -ForegroundColor Cyan ($_dest + '/' + $privvars['TRANQUILBUILD'] + '/control' )
   $_control = ($_dest + '/' + $privvars['TRANQUILBUILD'] + '/control' )
 
   # Check if Control file exists and returns any content
   Write-Verbose ( $ltx + "Checking content of control file: " + $_control)
   $_controlcontent = Get-Content $_control
- # write-host -ForegroundColor Blue ("This: " + $_controlcontent)
+ # write-host -ForegroundColor Cyan ("This: " + $_controlcontent)
   if ( -Not $_controlcontent ) {
     Write-Error ($ltx + "Package is not a valid Tranquil file.")
     exit (667)
   }
-  # Write-Host -ForegroundColor Blue ($_controlcontent)
+  # Write-Host -ForegroundColor Cyan ($_controlcontent)
   # Read the package metadata and find distribution packagename and version
   # to determine where to store the package meta content
   # Also check if all relevant metadata exists. We MUST have
@@ -194,10 +429,10 @@ Function Update-TranquilServerPackageInfo {
   $FoundSection = $False
   
   $NewPackageHash = @{}
-  $_controlcontent | % {
+  $_controlcontent | sort | % {
     # Here we can add tests to verify that only approved content metadata is added. TODO
           # $thisPackage.Add($mySplit[0].ToLower(), $mySplit[1].ToLower())
-    if (( $_ -NotMatch "^\s*\#" ) -And ( $_ -Match "\:")) {
+    if (( $_ -NotMatch "^\s*[\#\-]" ) -And ( $_ -Match "\:")) {
       $mySplit = $_.Split(":")
       # In case the content metadata contains any ';' characters, this split will remove it. 
       # So we have to put it back
@@ -215,22 +450,25 @@ Function Update-TranquilServerPackageInfo {
       # Write-Host -ForegroundColor Red $_value
       # Write-Host -ForegroundColor Red ("----")
     $NewPackageHash.Add($mySplit[0], $_value)
-# write-Host -ForegroundColor Blue ("   ---> Adding item: " + $mySplit[0] + "::" + $_value)
+# write-Host -ForegroundColor Cyan ("   ---> Adding item: " + $mySplit[0] + "::" + $_value)
     }
     # $NewPackageMetadata += $_
     if ( $_ -Match "^Section\:" ) {
-      $SectionPath = ($_ -Replace "^Section\:\s*", "").Trim()
+      $TmpSection = ($_ -Replace "^Section\:\s*", "").Trim()
       $FoundSection = $True
-   Write-Host -ForegroundColor Blue ("Found explicit seciotn: " + $SectionPath)
     }
   }
 
+  # $BaseDistributionPath = (($BaseDirectory -Replace "[\/]*\s*$", "") + '/' + ($Distribution -Replace "[\/]*\s*$", "" ))
+  $BaseDistributionPath = $BaseDirectory.TrimEnd('/') + '/dists/' + $Distribution.TrimEnd('/')
   if ( $FoundSection ) {
-    $SectionPath = (($BaseDirectory -Replace "[\/]*\s*$", "") + '/' + ($SectionPath))
+    $SectionPath = ($BaseDistributionPath + '/' + $TmpSection)
   } else {
-    $SectionPath = (($BaseDirectory -Replace "[\/]*\s*$", "")) + '/' + 'main'
+    $SectionPath = ($BaseDistributionPath + '/' + 'main')
     $NewPackageHash.Add("Section", "main")
   }
+  $ThisSection = $NewPackageHash["Section"]
+# write-host -ForegroundColor Cyan ("Sectionpath: " + $SectionPath)
 
   # Now check if the new Package contains enought metadata to create a key
   if ( $NewPackageHash.ContainsKey("Package") -And $NewPackageHash.ContainsKey("Version")) {
@@ -240,7 +478,7 @@ Function Update-TranquilServerPackageInfo {
     Return $False
   }
 
-  # Write-Host -ForegroundColor Blue ("TH2is: " + $NewPackageMetadata)
+  # Write-Host -ForegroundColor Cyan ("TH2is: " + $NewPackageMetadata)
   Write-Verbose ( $ltx + "Using SectionPath: " + $SectionPath )
   Write-Verbose ( $ltx + "Importing new package: " + $NewPackageKey )
 
@@ -253,11 +491,12 @@ Function Update-TranquilServerPackageInfo {
   $_packagefile = $SectionPath  + '/' + 'Packages'
   Write-Verbose ( $ltx + 'Using PckTmp: ' + $_packagedest )
   Write-Verbose ( $ltx + 'Working on Packages.gz: ' + $_packagegz)
+ # Write-Host -ForegroundColor Cyan ("---> Section :: ${SectionPath}")
 
   # Create a new section if it does not exist
   if ( ! ( Test-Path $SectionPath )) {
     try {
-      New-Item -ItemType Directory $SectionPath
+      New-Item -ItemType Directory $SectionPath | Out-Null
     } catch {
       Write-Error ("Could not create directory. Error 1515")
     }
@@ -266,7 +505,7 @@ Function Update-TranquilServerPackageInfo {
   # Create a new temp directory for the Package file
   if ( ! ( Test-Path $_packagedest )) {
     try {
-      New-Item -ItemType Directory $_packagedest
+      New-Item -ItemType Directory $_packagedest | Out-Null
     } catch {
       Write-Error ("Could not create directory. Error 1516")
     }
@@ -279,7 +518,8 @@ Function Update-TranquilServerPackageInfo {
   } 
   $PackageContents = Get-Content -ErrorAction SilentlyContinue $_ptmpfile
   # Reset the Package file
-  ("# Updated " + (Get-Date -UFormat "%Y-%m%-%d %H:%M:%S")) | Out-File -Encoding utf8 $_ptmpfile
+  # ("# Updated " + (Get-Date -UFormat "%Y-%m%-%d %H:%M:%S")) | Out-File -Encoding utf8 $_ptmpfile
+  ("# Imported packages" )                                  | Out-File -Encoding utf8 $_ptmpfile
   ("#")                                                     | Out-File -Append -Encoding utf8 $_ptmpfile
   ("")                                                      | Out-File -Append -Encoding utf8 $_ptmpfile
 
@@ -297,17 +537,17 @@ Function Update-TranquilServerPackageInfo {
   $NewPackageContents = @{}
   $DoneRegisteredNewPackage = $False
   $PackageContents | % {
-# Write-Host -ForegroundColor Blue ("Packagecontetnline: " + $_)
+    # Write-Host -ForegroundColor Cyan ("Packagecontetnline: " + $_)
     if ( $NewPackage ) {
- # Write-Host -ForegroundColor Blue ("---> This is a new package <----")
+      # Write-Host -ForegroundColor Cyan ("---> This is a new package <----")
       $NewPackage = $False
       if ( $thisPackage.count -gt 0 ) {
         # We have found a package. Store it in our hash using Name+Version as a key
         $thisKey = (($thisPackage.Package).ToLower().Trim() +'-'+ ($thisPackage.Version).ToLower().Trim())
-# Write-Host -ForegroundColor Blue ("PLANTER: " + $thisKey)
+        # Write-Host -ForegroundColor Cyan ("PLANTER: " + $thisKey)
         # Try to inject the new package metadata in alphabetical order
         if ( $NewPackageKey -lt $thisKey ) {
-          # write-host -ForegroundColor Blue ("MMMM> " + $thisKey + " - " + $NewPackageKey)
+          # write-host -ForegroundColor Cyan ("MMMM> " + $thisKey + " - " + $NewPackageKey)
           # Check if the package is not already registered
           if ( -Not ($NewPackageContents.ContainsKey($NewPackageKey)) ) {
             $NewPackageContents.Add( $NewPackageKey, $NewPackageHash )
@@ -326,12 +566,12 @@ Function Update-TranquilServerPackageInfo {
     if ( $_ -Match "^\s*$" ) {
       $NewPackage = $True
     } else {
-# Write-Host -ForegroundColor Blue ("PKLine: " + $_)
-      if ($_ -NotMatch "^\s*\#" ) {
+# Write-Host -ForegroundColor Cyan ("PKLine: " + $_)
+      if ($_ -NotMatch "^\s*[\#\-]" ) {
         if ( $_ -Match "^[A-Z][a-z]*\:" ) {
           $mySplit = $_.Split(":")
           $thisPackage.Add($mySplit[0].ToLower(), $mySplit[1].ToLower())
-# Write-Host -ForegroundColor Blue ("   LLLLLL> " + $mySplit[0].ToLower() + "::" + $mySplit[1].ToLower())
+# Write-Host -ForegroundColor Cyan ("   LLLLLL> " + $mySplit[0].ToLower() + "::" + $mySplit[1].ToLower())
         }
       }
     }
@@ -346,43 +586,55 @@ Function Update-TranquilServerPackageInfo {
 
 
   # Now start the output of a package
-  # write-host -ForegroundColor Blue ("This is the NEW contents: " + $NewPackageContents )
+  # write-host -ForegroundColor Cyan ("This is the NEW contents: " + $NewPackageContents )
   foreach($itemkey in $NewPackageContents.GetEnumerator() | Sort-Object Name ) {
     $NewOutput = ""
-    # Write-Host -ForegroundColor Blue ("ItemKey: " + $itemkey.Name)
-    foreach ( $packageitem in $NewPackageContents[$itemkey.Name] ) {
-      foreach ( $packagekey in $packageitem.keys ) {
+    # Write-Host -ForegroundColor Cyan ("ItemKey: " + $itemkey.Name)
+    foreach ( $packageitem in $NewPackageContents[$itemkey.Name] | Sort-Object Name ) {
+      foreach ( $packagekey in $packageitem.keys | Sort-Object  ) {
         ($packagekey.Trim() + ": " + $packageitem[$packagekey].Trim()) | Out-File -Append -Encoding utf8 -FilePath $_ptmpfile
       }
       # Add a newline to deliniate the packages
-      "`n" | Out-File -Append -Encoding utf8 -FilePath $_ptmpfile 
+      "" | Out-File -Append -Encoding utf8 -FilePath $_ptmpfile 
     }
   }
-  # Write-Host -ForegroundColor Blue ("NewOutput: `n")
-  # Write-Host -ForegroundColor Blue ($NewOutput)
-  # write-host -ForegroundColor blue ("  ----- || -----  ")
 
+  # Add stop info to package
+  "--- End of Package ---" |  Out-File -Append -Encoding utf8 -FilePath $_ptmpfile
+
+  # Take a MD5SUM of the package and register it in the InRelease file for checksum
+  # This checksum should be similar across Tranquil Server clusters
+  $PackagesMD5  = (Get-FileHash -Algorithm md5 ${_ptmpfile}).Hash
+  $PackagesSize = (Get-Item $_ptmpfile).Length
+  Write-Verbose ("Checksum of Package is now: " + $PackagesMD5)
   Compress-Archive -DestinationPath $_ptmpfilegz $_ptmpfile | Out-Null
 
   # Check that the new archive file has been created and move it into its final location
   $_myCheck = Get-Item -ErrorAction SilentlyContinue $_ptmpfilegz
   if ( ($_myCheck.Exists) -And ( -Not $_myCheck.IsPsContainer) ) {
-    # Write-Host -ForegroundColor Blue ("Moving from "+ $_ptmpfilegz+" TO " + $_packagegz )
+    # Write-Host -ForegroundColor Cyan ("Moving from "+ $_ptmpfilegz+" TO " + $_packagegz )
+    # Take a MD5SUM of the compressed package and register it in the InRelease file for checksum
+    # This checksum will differ across Tranquil Server clusters due to compressing algorithm
+    $PackagesGzMD5    = (Get-FileHash -Algorithm md5    ${_ptmpfilegz}).Hash
+    $PackagesGzSHA256 = (Get-FileHash -Algorithm SHA256 ${_ptmpfilegz}).Hash
+    $PackagesGzSize  = (Get-Item $_ptmpfilegz).Length
+    Write-Verbose ("Checksum of Package.gz is now: " + $PackagesGzMD5)
+    Update-TranquilRelease -BaseDirectory $BaseDirectory -Section $ThisSection -PackagesMD5 $PackagesMD5 -PackagesSHA256 (Get-FileHash -Algorithm sha256 $_ptmpfile).Hash -PackagesGzMD5 $PackagesGzMD5 -PackagesGzSHA256 $PackagesGzSHA256    -PackagesSize $PackagesSize  -PackagesGzSize $PackagesGzSize -Distribution $Distribution
     Move-Item -Force $_ptmpfilegz $_packagegz
   }
 
   # Cleaning up Package file temp directory
   if ( Get-Item -ErrorAction SilentlyContinue $_packagedest ) {
-    # Write-Host   -ForegroundColor Blue ("Deleting : " +  $_packagedest )
+    # Write-Host   -ForegroundColor Cyan ("Deleting : " +  $_packagedest )
     Write-Verbose ($ltx + "Removing tmp file: " + $_packagedest)
   }
   # Cleaning up main tmp directory
   if ( Get-Item -ErrorAction SilentlyContinue $_dest ) {
-    # Write-Host   -ForegroundColor Blue ("Deleting : " +  $_dest )
+    # Write-Host   -ForegroundColor Cyan ("Deleting : " +  $_dest )
     Write-Verbose ($ltx + "Removing tmp file: " + $_dest)
   }
   
-  # Write-Host -ForegroundColor Blue "Schnarf"
+  # Write-Host -ForegroundColor Cyan "Schnarf"
 }
 
 Function Get-PrivateVariables {
